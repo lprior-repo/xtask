@@ -2,6 +2,12 @@
 
 Developer tooling for the velvet-ballistics workspace.
 
+## Assurance Compiler (assurec)
+
+xtask ships an **assurance compiler** that enforces deterministic hard gates across all Rust artifacts — zero hallucination, zero unwrap, typed expressions, and railway programming.
+
+See [docs/assurance-compiler-prd.md](docs/assurance-compiler-prd.md) for the full design doc.
+
 ## What it does
 
 xtask is the automation and quality-gate runner for velvet-ballistics. It provides deterministic, scriptable commands that orchestrate the development workflow:
