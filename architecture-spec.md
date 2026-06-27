@@ -1,610 +1,795 @@
 # Architecture Spec: Xtask — The Deterministic Rust Quality Enforcement Gate
 
-> Status: ARCHITECTURE SPEC v2.0 (Restate removed; general Rust quality tool)
-> Doctrine sources read in full: holzman-rust (SKILL + nasa-jpl-standards + latency-throughput-playbook + runtime-performance-architecture + zero-cost-abstractions + simd-patterns + mechanical-empathy-toolchain) and functional-rust (SKILL + scott-ddd-types + typing-refactor-checklist + complete-workflow).
+> Status: ARCHITECTURE SPEC v3.0 — black-hat hardened
+> v3 addresses a comprehensive adversarial review: signing-key isolation, artifact-bound certificates, freshness/revocation, anti-circular policy, bypass-surface countermeasures, corrected tool claims, sandbox profile, honest non-overclaiming, and a corrected domain model.
 > Next step: run `arch-spec-to-beads` to shred this into molecular tasks.
 
 ---
 
-## 0. Product Sentence
+## 0. Product Sentence (honest, non-overclaiming)
 
 ```
-Xtask is a deterministic CLI that wraps the full NASA/JPL Power-of-Ten +
-functional-Rust toolchain and gates AI-authored Rust. It is the DECIDE
-step of an AI authoring OODA loop: it returns a structured per-layer
-verdict and a signed certificate, or it rejects. It contains zero
-macros, zero DSL, zero LLM, zero runtime — it is 100% mechanical static
-analysis that wraps real tools. When Xtask passes, you KNOW the code is
-of very high quality, because a vast set of decidable properties has
-been mechanically proven and the AI cannot route around the gate.
-```
+Xtask is a deterministic CLI that wraps a pinned stack of Rust quality tools
+(fmt, rustc, clippy, semgrep, cargo-audit/deny/vet/geiger/machete, cargo-hack,
+cargo-mutants) and gates code against a specific, pinned policy derived from
+the NASA/JPL Power-of-Ten and functional-Rust doctrine. It is the DECIDE step
+of an AI authoring OODA loop: it returns a structured per-layer report and a
+signed attestation, or it rejects.
 
-Xtask gates **arbitrary Rust**. It is not specific to any SDK, framework, or domain. The AI writes real Rust; Xtask enforces that it satisfies the complete Holzman + functional-rust discipline.
+PASSING XTASK MEANS THE CODE PASSED A SPECIFIC PINNED POLICY. It does not mean
+"you KNOW the code is high quality" in an absolute sense — tools have limits
+(Miri observes particular executions, Kani can run out of resources, semgrep
+cannot see macro-expanded code). What Xtask guarantees is that the code could
+not ship without mechanically passing every scoped lane of that pinned policy,
+and that the attestation is artifact-bound and fresh. No macros, no DSL, no LLM,
+no custom lint code inside the gate — 100% mechanical tool wrapping.
+```
 
 ---
 
-## 1. Non-Goals (Explicit Exclusions)
+## 1. Threat Model
 
-- **NO macros, NO DSL, NO grammar.** Xtask never parses a constrained language. It gates real Rust via real tools. (Non-negotiable — repeated.)
-- **NO LLM inside the gate.** Xtask contains zero non-determinism. The AI is external and consumes Xtask's JSON.
-- **NO runtime, NO execution.** Xtask never runs the gated code's logic. It only verifies.
-- **NO code generation as source of truth.** Xtask emits typed repair *hints*, never the author's final code.
-- **NO bypass flag.** No `--force`, no `--trust-me`, no inline `#[allow]` for the gated codebase. The only escape is a policy-PR.
-- **NO domain coupling.** No Restate, no SDK-specific rules in v1. Pure general Rust quality.
+**The AI code author is potentially MALICIOUS, not merely buggy or careless.**
 
----
+The design assumes the author will attempt to bypass the gate via: `#[allow]`/`#[expect]`, `.cargo/config.toml`, build scripts, proc macros, `include!`/`#[path]`, `cfg`-gated code, PATH poisoning, tool-native suppressions (semgrep ignores, cargo-audit `--ignore`, cargo-vet exemptions, cargo-mutants `--exclude`), generated code, dependency tricks, empty proof obligations, and policy weakening.
 
-## 2. Positioning — The AI OODA Loop
+**The signing key is a crown-jewel secret.** It must NEVER exist in any environment that executes untrusted Cargo commands (build scripts, proc macros, tests, fuzz, mutants all run attacker-controlled code). See §7 (two-environment architecture).
 
-```
-OBSERVE   AI reads context, existing code, Xtask's prior verdict
-ORIENT    AI generates candidate Rust
-DECIDE    Xtask gate — runs the full toolchain, emits verdict + certificate
-ACT       Accepted code (valid certificate) ships
-```
-
-The AI is the **primary invoker**, running Xtask dozens of times per task in a tight repair loop. CI/Moon is secondary (canonical deploy gate). Local human runs are tertiary.
-
-### 2.1 How AI Agents Leverage Xtask (end-to-end)
-
-Xtask is designed as the AI agent's verification layer. The agent never ships code that hasn't passed the gate. The repair loop:
-
-```
-1. AI writes Rust (targeting the curated crate stack, §5.9)
-2. AI runs: xtask gate --scope fast --emit json
-3. Xtask runs layers 0–6, returns structured verdict
-4. AI reads the disjoint verdict JSON:
-     - Pass → done, certificate emitted
-     - Reject → reads typed findings + repair hints, fixes code, goto 2
-     - GateFailure → recognizes infra issue (do NOT edit code), reports blocker
-     - PolicyError → recognizes policy issue (edit policy, not code)
-5. For performance-critical modules:
-     - AI marks module #[xtask::hot] with workload/budget declaration
-     - AI writes the Criterion/iai-callgrind benchmark
-     - AI runs: xtask gate --scope full --emit json
-     - Xtask runs the benchmark, compares against declared threshold
-     - Reject with PERF_* finding if latency/throughput/allocation over budget
-     - AI profiles (flamegraph/heaptrack), optimizes, re-runs
-6. Certificate emitted only on full Pass → deploy-gate accepts → code ships
-```
-
-**What the AI gets from each verdict finding (the repair contract):**
-
-| Finding type | What the AI does |
-|---|---|
-| `HOLZMAN_PANIC_UNWRAP` | Replace `.unwrap()` with `match`/`map_or_else` (ReplaceWith hint) |
-| `HOLZMAN_PANIC_INDEXING` | Replace `items[i]` with `items.get(i)` (ReplaceWith hint) |
-| `FUNC_LOOPS_IMPERATIVE` | Replace `for`/`while`/`loop` with iterator pipeline (UseIteratorPipeline hint) |
-| `FUNC_NESTING_DEPTH` | Decompose nested logic into named functions (FlattenNesting hint) |
-| `HOLZMAN_ARITHMETIC` | Replace raw `+` with `checked_add` (ReplaceWithCheckedArith hint) |
-| `HOLZMAN_UNSAFE` | Remove unsafe or request explicit waiver (RemoveUnsafeWaiver hint) |
-| `SUPPLY_BANNED_CRATE` | Replace banned crate with approved alternative (ReplaceWith hint) |
-| `MUTANT_SURVIVING` | Add a test that catches the mutation (RequiresHumanReview hint) |
-| `PERF_NO_BENCHMARK` | Write a named Criterion/iai-callgrind benchmark for the hot module |
-| `PERF_REGRESSION` | Profile (flamegraph/heaptrack), optimize bottleneck, re-run |
-| `PERF_ALLOCATION_OVER` | Reduce allocations (borrow, preallocate, arena, caller-owned buffer) |
-
-**Why this works for AI agents:**
-- The verdict is **deterministic** — same code always produces the same verdict. The AI's repair loop converges; no flapping.
-- The failure categories are **type-disjoint** — the AI never wastes a cycle trying to fix an infra failure by editing code.
-- The repair hints are **typed and machine-actionable** — `ReplaceWith{old, new}` is auto-applicable; `RequiresHumanReview` tells the AI to stop and escalate.
-- The certificate is **the trust artifact** — the AI cannot fabricate it; only a full Pass + CI signing produces it. Deploy-gate rejects without it.
-- The AI **cannot route around the gate** — no `--force`, no inline bypass, policy-PR is the only escape and that PR passes the same gate.
+**Xtask's own source is trusted** (it is gated by itself and reviewed). The GATED code (what the AI writes) is untrusted.
 
 ---
 
-## 3. EARS Requirements
+## 2. Non-Goals (corrected — no contradictions)
 
-### Ubiquitous language
-- **Layer** — one enforcement stage wrapping one or more external tools.
-- **Verdict** — the typed result of a single Xtask invocation over an input unit.
-- **Finding** — a single rule violation with span, rule id, and typed repair hint.
-- **Certificate** — the Ed25519-signed artifact binding source + per-gate + policy + toolchain digests, emitted ONLY on aggregate Pass.
-- **Policy** — the checked-in set of rule definitions + thresholds (clippy.toml, .xtask/semgrep/, deny.toml, rust-toolchain.toml, the xtask policy manifest). Policy changes require a PR through the same gate.
+- **NO Xtask-specific authoring macros or DSL.** Ordinary Rust macros (`thiserror`, `serde`/`clap` derives, `assert!` in tests) are allowed through policy. What is banned is an Xtask-defined grammar that the AI writes code inside.
+- **NO LLM inside the gate.** The AI is external; it consumes the report JSON.
+- **NO claim of omniscience.** Xtask enforces a pinned policy; it does not prove behavioral correctness or catch all UB. The product sentence is honest about this.
+- **NO bypass flag.** No `--force`. The only escape is a policy-PR that is checked against the PREVIOUS policy plus a meta-policy (§13).
+- **NO code generation as source of truth.** Xtask emits typed repair hints, never the author's final code.
+
+---
+
+## 3. Positioning — The AI OODA Loop + Agent Leverage
+
+```
+OBSERVE   AI reads context, existing code, Xtask's prior report
+ORIENT    AI generates candidate Rust (targeting the curated crate stack, §6.9)
+DECIDE    Xtask gate — runs the toolchain in a sandbox, emits report + attestation
+ACT       Accepted code (valid, fresh, signed attestation + matching artifact) ships
+```
+
+The AI is the primary invoker. The repair loop:
+
+```
+1. AI writes Rust
+2. AI runs: xtask gate --scope edit --emit json     (fast loop: fmt/check/clippy/semgrep/assert-scan)
+3. AI reads the disjoint report:
+     Pass          → fast lanes passed; run --scope full for CI-readiness
+     CodeReject    → reads typed findings + repair hints, fixes code, goto 2
+     GateReject    → recognizes infra issue (do NOT edit code), reports blocker
+     PolicyError   → recognizes policy issue (edit policy, not code)
+     InputError    → fix the input contract
+4. AI runs: xtask gate --scope full --emit json      (CI path: +supply/hack/mutants)
+5. Attestation emitted only on full Pass → signer environment signs → deploy-gate accepts
+```
+
+**Scope tiers (the "fast" loop is actually fast):**
+
+| Scope | Lanes | Target latency | Use case |
+|---|---|---|---|
+| `edit` | fmt, check, clippy, semgrep, assert-scan | <30s | AI repair loop (dozens of iterations) |
+| `prepush` | edit + supply-chain + feature-powerset | <90s | before push |
+| `full` | prepush + mutants | <300s, policy-scaled | CI / deploy-gate |
+
+Time budgets are **SLOs scaled by crate size**, not correctness gates. A large healthy crate that takes 60s for clippy is not "rejected" — the budget adapts. Mutants/feature-powerset budgets are per-policy.
+
+---
+
+## 4. EARS Requirements (corrected)
 
 ### Event-driven
-- **When** the AI submits a crate or diff, **the system shall** run all layers in order, short-circuiting only where a layer's precondition is unmet.
-- **When** any layer cannot produce a verdict (tool crash, timeout, missing binary), **the system shall** emit aggregate Reject, emit NO certificate, and report the layer as a `GateFailure`.
-- **When** all layers emit `Pass`, **the system shall** emit aggregate Pass, compute and sign a certificate, and write it to the output path.
-- **When** a policy file is malformed, **the system shall** emit a `PolicyError` and reject; this is NOT a code violation.
+- **When** the AI submits a crate or diff, **the system shall** run the scoped lanes, short-circuiting ONLY compilation-dependent lanes when Layer 1 (check) fails. Semgrep (Layer 3) runs on source REGARDLESS of compilation status — it does not need the crate to typecheck, and skipping it on compile failure reduces repair signal.
+- **When** any scoped lane cannot produce a report (tool crash, timeout, missing binary), **the system shall** emit a `GateReject` with no attestation.
+- **When** all scoped lanes emit clean, **the system shall** emit `Pass`, compute the evidence digest, and write canonical evidence artifacts to the output path. Signing happens in a SEPARATE environment (§7).
 
 ### State-driven
-- **While** a certificate is valid and unmodified, **the deploy-gate shall** permit deployment; **otherwise it shall** reject.
+- **While** an attestation is valid, fresh (within `not_after`), and its evidence digest matches the current artifact+policy+advisory-db, **the deploy-gate shall** permit deployment.
+- **If** the advisory DB has changed since the attestation was issued (advisory_db_digest mismatch), **the deploy-gate shall** REJECT regardless of signature validity — a dependency may have gained an advisory.
 
 ### Unwanted
-- **If** the deploy-gate receives a deployment request with no certificate or a certificate whose digests do not match the artifact, **the system shall NOT** deploy.
-- **If** any layer emits a finding, **the system shall NOT** emit a certificate.
+- **If** the signing key is present in any environment that executes a Cargo command on untrusted code, **the system design is BROKEN.** This is an invariant (§7).
+- **If** a tool-native suppression (`#[allow]`, `#[expect]`, semgrep ignore, cargo-audit `--ignore`, etc.) is found in gated source, **the system shall** flag it unless explicitly ledgered (§12).
 
 ---
 
-## 4. KIRK Contracts
+## 5. Domain Model (corrected — single disjoint root enum)
 
-### 4.1 Core invariant: Fail-Closed
-> An aggregate Pass verdict and a valid certificate are emitted if and only if every layer produced a `Pass`. Any layer that cannot produce a verdict forces aggregate Reject with no certificate. Code never passes by default.
-
-### 4.2 Determinism of Xtask itself
-Xtask is **deterministic**: identical input (source bytes + Cargo.lock + toolchain pin + policy bytes) produces an identical verdict and identical certificate digests. The AI's repair loop depends on this.
-
-### 4.3 The verdict type (the AI's contract) — disjoint typed enum
-
-Misrouting across these categories is impossible at the type level:
+### 5.1 The report type
 
 ```rust
-pub enum Verdict {
-    Pass { certificate: Certificate, per_layer: Box<[LayerOutcome]> },
-    Reject { findings: Box<[Finding]>, per_layer: Box<[LayerOutcome]> },
-}
-
-pub enum LayerOutcome {
-    Pass,
-    Violations(Box<[Finding]>),       // code problems — AI edits code
-    GateFailure(LayerFailure),        // tool crashed/missing/timeout — infra, do NOT edit code
-    Skipped { reason: SkipReason },   // only when a prior layer failed (short-circuit)
-}
-
-pub enum TopLevelError {
-    PolicyError(PolicyDiagnostic),    // policy malformed — edit policy, NOT code
-    InputError(InputDiagnostic),      // not a crate, unreadable diff, path missing
+/// The single disjoint root. Every invocation produces exactly one.
+pub enum Report {
+    Pass { evidence: EvidenceDigest, per_lane: Box<[LaneOutcome]> },
+    CodeReject { findings: Box<[Finding]>, per_lane: Box<[LaneOutcome]> },
+    GateReject { failures: Box<[LaneFailure]>, per_lane: Box<[LaneOutcome]> },
+    PolicyError(PolicyDiagnostic),
+    InputError(InputDiagnostic),
 }
 ```
 
-`Finding` (CodeViolation), `LayerFailure` (GateFailure), and `PolicyDiagnostic` (PolicyError) are **three disjoint types with three disjoint fix paths**.
+`CodeReject` = the Rust is wrong (AI edits code). `GateReject` = a tool crashed/missing/timeout (AI does NOT edit code — infra). `PolicyError` = policy malformed (edit policy). These are type-disjoint with disjoint fix paths.
 
-### 4.4 The finding type (typed repair hints)
+### 5.2 Lane outcomes (corrected skip semantics)
+
+```rust
+pub enum LaneOutcome {
+    Clean { evidence: LaneEvidence },
+    Findings(Box<[Finding]>),
+    Failed(LaneFailure),
+    Skipped(SkipReason),
+}
+
+pub enum SkipReason {
+    PriorCompilationFailure,   // Layer 1 failed; compilation-dependent lanes skip
+    NotSelectedByScope,        // the --scope didn't include this lane
+    NotApplicable,             // e.g. no unsafe code → Miri not applicable
+    PolicyDisabled,            // policy explicitly disabled this lane
+}
+```
+
+### 5.3 The finding type
 
 ```rust
 pub struct Finding {
-    pub layer: Layer,
+    pub lane: Lane,
     pub rule_id: RuleId,
-    pub severity: Severity,           // Error | Warning
-    pub span: Span,                   // file, line/col start+end
+    pub location: Location,        // NOT always a span (see below)
     pub message: String,
     pub repair: RepairHint,
 }
 
+/// Location is a sum type — many findings are not source spans.
+pub enum Location {
+    Span { file: PathBuf, line_start: u32, col_start: u32, line_end: u32, col_end: u32 },
+    Dependency { crate_name: String, version: String, source: DepSource },
+    Manifest { file: PathBuf },
+    Workspace,
+    Tool { name: String, version: String },
+    Artifact { digest: Digest },
+}
+```
+
+### 5.4 Repair hints (serializable, JSON-friendly — no Rust lifetimes)
+
+```rust
+#[derive(Serialize, Deserialize)]
 pub enum RepairHint {
-    ReplaceWith { old: String, new: String },
-    UseIteratorPipeline { suggestion: String },   // for forbidden loops
-    FlattenNesting { suggestion: String },         // for >2 nesting
-    ReplaceWithCheckedArith { op: &'static str }, // + -> checked_add
-    RemoveUnsafeWaiver,                            // unsafe needs explicit approval
+    Patch { file: String, range: TextRange, replacement: String },
+    UseIteratorPipeline { suggestion: String },
+    FlattenNesting { suggestion: String },
+    UseCheckedArithmetic { op: String },   // "checked_add", "saturating_sub", etc.
+    RemoveAllowAttribute { attr: String },
+    ReplaceDependency { from: String, to: String },
+    AddBenchmark { benchmark_name: String },
     RequiresHumanReview { note: String },
 }
 ```
 
+### 5.5 Lane evidence (every Clean outcome carries proof)
+
+```rust
+pub struct LaneEvidence {
+    pub command: String,           // exact command run
+    pub tool_path_hash: Digest,    // hash of the resolved binary path
+    pub tool_version: String,
+    pub env_digest: Digest,        // relevant env vars (frozen, §9)
+    pub stdout_digest: Digest,     // digest of captured stdout (canonicalized)
+    pub stderr_digest: Digest,
+    pub duration_ms: u64,
+    pub exit_status: i32,
+    pub parsed_result_digest: Digest,  // digest of the parsed findings/result
+}
+```
+
 ---
 
-## 5. The Complete Doctrine Xtask Enforces
+## 6. The Doctrine (Holzman + functional-rust — tool-correctness fixed)
 
-This is the full Holzman (NASA/JPL Power of Ten + PLUS) plus functional-rust doctrine, read from the reference files. Every item maps to a checkable layer.
+### 6.1 Panic-free standard (mechanically unbeatable for the constructs it covers)
 
-### 5.1 Power of Ten (Holzman Rule 1–10) — source: nasa-jpl-standards.md
+`unsafe_code` = forbid. `unwrap`/`expect`/`panic`/`todo`/`unimplemented`/`unreachable!`/`dbg!` denied. Production `assert!`/`assert_eq!`/`assert_ne!` (the `rg` scan, excluding tests/benches/examples/build.rs BUT build.rs gets its OWN stricter lane — §8).
 
-| # | Rule | Xtask enforcement |
-|---|---|---|
-| 1 | Simple control flow: no recursion/panic-driven flow | clippy + semgrep: deny recursion in critical paths; panic-driven control flow blocked by panic deny |
-| 2 | **Fixed loop bounds: every loop needs static upper bound or termination proof** | semgrep flags unbounded `loop{}`/`while`/`for`; functional-rust goes further — **no imperative loops at all** (see 5.3) |
-| 3 | No post-init dynamic allocation in critical paths | budget policy (allocation-count gate on hot-path modules, opt-in); clippy `box_collection` etc. |
-| 4 | Functions ≤ one page (~60 lines, ≤25 hot) | clippy `too_many_lines` (threshold 40, tunable) |
-| 5 | Assertion density via types/constructors; production `assert!` is a panic path | the **production-assert-macro scan** (rg for `assert!`/`assert_eq!`/`assert_ne!`/`unreachable!` outside tests/benches/examples/build.rs) = Reject |
-| 6 | Smallest scope | clippy `needless_late_init` etc. |
-| 7 | Checked returns: never ignore Result/Option/handles | `unused_must_use` = deny; `let_underscore_must_use` = deny |
-| 8 | Limited macros: must not hide allocation/panic/unsafe/loops | semgrep macro-audit rules |
-| 9 | Restricted pointers: raw pointers/dyn Trait/FFI behind safe wrappers | `unsafe_code` = forbid; `as_conversions` = deny; FFI flagged |
-| 10 | Zero warnings + strong static analysis | `-D warnings` everywhere; the full toolchain gate |
+**Honest caveat:** `panic_in_result_fn` cannot prove a function doesn't panic (called functions may). `unused_must_use` only catches `#[must_use]` types, not all results (add `unused_results` as warn). Indexing ban catches `items[i]` but not all panic paths.
 
-### 5.2 Panic-Free Standard (Holzman) — mechanically unbeatable
+### 6.2 Strict clippy (STUPIDLY strict — all groups maxed, tool-correctness fixed)
 
-Production-reachable code is **rejected** if it contains:
-- `unsafe` blocks/functions/traits/impls/raw-pointer deref/transmute (forbid)
-- `unwrap`, `expect`, `panic`, `todo`, `unimplemented`, `unreachable!`
-- indexing `items[i]` without bound proof (`indexing_slicing` deny)
-- `string_slice`, `get_unwrap`
-- `parse().unwrap()`, `Mutex::lock().unwrap()`, `send().unwrap()`
-- production `assert!`/`assert_eq!`/`assert_ne!` (the rg scan)
-- `dbg!`, ignored `Result`, `let _ =` on must-use
-- unchecked arithmetic (`arithmetic_side_effects` deny)
-- lossy `as` conversions (`as_conversions` deny)
-
-### 5.3 Functional-Rust Doctrine — source: functional-rust SKILL + references
-
-| Rule | Enforcement |
-|---|---|
-| **ZERO unwrap in any form** (incl. `unwrap_or`/`unwrap_or_else`/`unwrap_or_default`) | clippy `unwrap_used` deny + semgrep for the `unwrap_or*` family (clippy only catches `unwrap_used`, not `unwrap_or*`) |
-| No swallowed errors | `unused_must_use` deny + semgrep catch-empty-block |
-| **Linear control flow, ≤2 nesting levels** | semgrep nesting-depth rule (clippy `cognitive_complexity` is advisory; hard gate needs semgrep) |
-| **NO imperative loops (`for`/`while`/`loop`)** — use Iterator/Stream/Rayon | semgrep rule matching loop keywords in source (clippy has no blanket no-loops lint) |
-| One function one job (~60 lines) | clippy `too_many_lines` |
-| Surface side effects (I/O only in Actions layer) | architectural; semgrep flags obvious hidden I/O |
-| Make illegal states unrepresentable (enums/typestates) | `non_exhaustive_patterns`/`unreachable_patterns` deny; remove wildcard arms (semgrep) |
-| Parse don't validate (boundary newtypes) | architectural guidance; not a hard gate |
-| No `mut` by default | clippy `redundant_mut`/`unnecessary_mut_passed` |
-| Zero-copy parsing (`&'a str`, `Cow`, `Bytes`) | architectural; clippy `clippy::all` catches some |
-| `thiserror` for core errors, `anyhow` for shell; no `Result<T, String>` | semgrep `Result<_, String>` rule |
-| No bool control flags (use enums) | clippy `fn_args_justly`/semgrep |
-
-### 5.4 PLUS Performance Gates (Holzman) — opt-in budget lanes
-
-These are correctness-of-claim gates, not correctness-of-compilation. They activate when a module is marked hot/critical in policy. **No performance claim is accepted without benchmark evidence.** The full Holzman PLUS extensions:
-
-| Extension | Requirement | Xtask enforcement |
-|---|---|---|
-| Workload definition | State target hardware, input distribution, hot path, threshold before optimizing | semgrep: hot-module must declare a `#[xtask::hot]` workload doc |
-| Latency budget | p50/p95/p99 or max latency when user-visible/real-time/networking | requires named benchmark passing threshold; `cargo bench` evidence |
-| Throughput budget | ops/sec, bytes/sec, req/sec under realistic batching+concurrency | requires named benchmark passing threshold |
-| Allocation budget | mission-critical: zero post-init alloc; perf-only: count/bound allocs | `try_reserve` on untrusted growth; clippy `box_collection`/semgrep `format!`-in-hot-path |
-| Storage placement | stack/heap/arena/pool chosen by measured size, lifetime, locality | architectural review; clippy flags `Vec` where `SmallVec`/`ArrayVec` wins |
-| Cache layout | `size_of` review, field order, padding, AoS vs SoA, false sharing | semgrep: hot struct flagged if `#[repr(C)]` absent and size > cache line |
-| Static dispatch | generics/enums/inline in hot paths; justify `dyn Trait` | clippy disallowed `dyn Trait` in `#[xtask::hot]` modules |
-| Branch behavior | split hot/cold; minimize unpredictable branches in tight loops | clippy `cognitive_complexity`; `#[cold]` on rare error paths |
-| Numeric semantics | `checked_*` for external input; `saturating_*` for counters; `wrapping_*` for hashes/ring-buffers; plain `+-*` only with local range proof | `arithmetic_side_effects` deny; semgrep flags raw `+`/`-`/`*` in hot modules |
-| SIMD discipline | scalar oracle + scalar fallback + target-feature gate + alignment/remainder + benchmark | unsafe SIMD forbidden; safe `std::simd`/auto-vectorization only; needs explicit waiver for `std::arch` |
-| Concurrency budget | bounded queues/tasks/retries/locks; document cancellation + lock ordering | `await_holding_lock` deny; semgrep unbounded `spawn`/`channel` |
-| Code size | monomorphization/inlining/feature-flag bloat when changed | `cargo bloat` + `cargo llvm-lines` on changed hot crates |
-| Regression guard | baseline + result + command + workload + pass/fail threshold recorded | benchmark must include before/after evidence in the verdict |
-
-**Mechanical Empathy Standard (the meta-rule):** fast Rust makes the machine do less work — fewer bytes moved, fewer cache misses, fewer heap allocations, fewer unpredictable branches, fewer locks/atomics/syscalls, fewer virtual calls. Do not accept performance claims based on style. Accept only measured bottleneck removal. Optimization hierarchy: algorithm → memory traffic → data layout → allocation → branch predictability → synchronization → compiler visibility → target-specific builds/SIMD.
-
-**Arithmetic Standard:** every integer operation must name its overflow behavior — `checked_*` (invalid input/invariants), `saturating_*` (counters/metrics), `wrapping_*` (hashes/checksums/ring-buffers), plain arithmetic only when type/range proof is local and obvious.
-
-**OOM discipline:** hot paths and untrusted-input paths that grow memory must declare max size, use checked arithmetic for capacity, call `try_reserve` when allocation failure must be graceful, and return typed resource errors. `Vec::new()` + unbounded push on untrusted data = Reject.
-
-**Benchmarking & Profiling Tool Stack** — these are the evidence tools Xtask wraps when a module is declared hot. A performance claim with NO benchmark is `BLOCKER`, not a pass.
-
-| Tool | Role | Xtask gate use |
-|---|---|---|
-| **Criterion** (`criterion = "0.8"`) | Statistical local benchmarks — p50/p95/p99, regression detection, outlier classification | Named `cargo bench --bench <name>` must exist + pass threshold for `#[xtask::hot]` modules |
-| **iai-callgrind** (`iai-callgrind = "0.16"`) | Deterministic instruction/cache regression — no timing noise, counts raw instructions | CI-stable regression gate where timing is too noisy; exact instruction-count comparison |
-| **hyperfine** | CLI command benchmark comparison — statistical, warmup-aware | Benchmarking Xtask's own binary and CLI-path performance claims |
-| **perf stat** | CPU hardware counters — cycles, instructions, cache-misses, branches, branch-misses | Profiler evidence required for cache/dispatch/branch claims |
-| **cargo flamegraph / samply** | Hot-path discovery — sampled stack profiles | Required when the AI claims "the bottleneck is X" — Xtask demands the flamegraph showing X |
-| **heaptrack / DHAT / bytehound** | Allocation profiling — count/bytes per site, peak memory | Required for allocation-budget claims; `allocations_apply_input = 0` assertions |
-| **cachegrind** (valgrind) | Cache simulation — cache-miss modeling without hardware variance | Portable cache-behavior evidence where perf counters vary |
-| **cargo bloat** | Binary size — which crates/types dominate the binary | Code-size gate; flags monomorphization bloat on changed hot crates |
-| **cargo llvm-lines** | IR line count per generic — monomorphization/code-size bloat | Flags generic functions that explode under feature-powerset |
-| **tokio-console / console-subscriber** | Async task/resource diagnostics — task stalls, contention | Required for async hot-path claims; flags tasks holding locks across await |
-
-**Xtask's benchmark gate contract (for `#[xtask::hot]` modules):**
-1. A named benchmark target (Criterion or iai-callgrind) MUST exist in the crate. Missing benchmark = `PERF_NO_BENCHMARK` finding.
-2. The benchmark MUST pass the declared latency/throughput threshold from policy. Regression = `PERF_REGRESSION` finding with before/after numbers.
-3. Allocation-sensitive modules MUST have heaptrack/DHAT evidence showing the allocation count is within budget. Over-budget = `PERF_ALLOCATION_OVER` finding.
-4. The verdict records the benchmark command, the measured numbers, the threshold, and the pass/fail. This is the regression guard — recorded in the certificate.
-
-**Forbidden for performance claims:**
-- Generic `cargo bench` as discovery only — it is NOT a named benchmark. Xtask requires a real target name.
-- Template command names — Xtask substitutes the actual repo benchmark name or reports `BLOCKER`.
-- "It looks idiomatic, therefore fast" — no style-based claims accepted.
-
-### 5.5 Supply-Chain & Dependency Discipline (Holzman)
-
-- `cargo audit` — known advisories
-- `cargo deny check` — advisories, licenses, banned crates, duplicate versions
-- `cargo vet` — trusted dependency audit
-- `cargo geiger` — `unsafe` in dependency tree above threshold = Reject
-- `cargo machete` — unused dependencies = Reject
-- `cargo hack check --workspace --feature-powerset` — every feature combo compiles = Reject on breakage
-
-### 5.6 Mutation & Feature Correctness (Holzman)
-
-- `cargo mutants` — mutation testing; surviving mutants = finding (the tests did not catch a mutation)
-- `cargo hack --feature-powerset` — no feature combination breaks compilation
-
-### 5.7 Pinned Toolchain (Holzman)
-
-- Checked-in `rust-toolchain.toml` with pinned **dated** channel (nightly-YYYY-MM-DD or a pinned stable), `profile = "minimal"`, components `rustfmt clippy rust-src llvm-tools-preview`.
-- Allowed source features by default: `portable_simd`, `try_blocks` only.
-- `RUSTC_BOOTSTRAP` and arbitrary feature gates = policy violation.
-- Toolchain digest bound into the certificate.
-
-### 5.8 Strict Clippy Configuration (STUPIDLY strict — all groups maxed)
-
-Xtask enforces the maximum clippy strictness on gated source. Start with ALL lint groups denied, then allow-list only the few that are genuinely inapplicable. Tests are exempt from style gates (compile + behavior only).
-
-**The enforced `[workspace.lints.clippy]` on gated code:**
+Start with ALL groups denied, allow-list only inapplicable lints. Tests exempt from style (compile + behavior only).
 
 ```toml
-# --- ALL lint groups at maximum deny ---
+# ALL groups at maximum
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
-restriction = { level = "warn", priority = -1 }   # warn all, deny the important ones below
+restriction = { level = "warn", priority = -1 }
 
-# --- Hard denies: panic surface (Holzman panic-free standard) ---
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
-panic_in_result_fn = "deny"
-todo = "deny"
-unimplemented = "deny"
-unreachable = "deny"
-dbg_macro = "deny"
-missing_panics_doc = "deny"        # if you document a panic, you shouldn't have one
-exit = "deny"                       # no std::process::exit
+# CRITICAL lints use -F (forbid), NOT -D — #[allow] cannot lower a forbid
+# Xtask passes these as -F flags on the command line, not workspace lints:
+#   -F clippy::unwrap_used -F clippy::expect_used -F clippy::panic
+#   -F clippy::indexing_slicing -F clippy::string_slice -F clippy::get_unwrap
+#   -F clippy::arithmetic_side_effects
+# This is critical: -D lints CAN be overridden by #[allow] in source.
+# -F (forbid) cannot be lowered except via lint caps (which Xtask also scans for).
 
-# --- Hard denies: footgun access ---
-indexing_slicing = "deny"
-string_slice = "deny"
-get_unwrap = "deny"
-arithmetic_side_effects = "deny"
-as_conversions = "deny"
-let_underscore_must_use = "deny"
-await_holding_lock = "deny"
-
-# --- Hard denies: functional-rust (no unwrap in ANY form) ---
-unwrap_or_default = "deny"
+# Functional-rust style denies (these are STYLE, not panic-safety):
+unwrap_or_default = "deny"     # unwrap_or does NOT panic — this is house style
 unwrap_or_else = "deny"
 unwrap_or = "deny"
-
-# --- Hard denies: code quality ---
-too_many_lines = "deny"             # threshold 40
-too_many_arguments = "deny"         # threshold 5
-manual_unwrap_or_default = "deny"
-map_unwrap_or = "deny"
+too_many_lines = "deny"         # threshold 40
+too_many_arguments = "deny"     # threshold 5
+exit = "deny"
 str_to_string = "deny"
 string_to_string = "deny"
-suspicious_operation_groupings = "deny"
-tests_outside_test_module = "deny"
-unused_async = "deny"
-unused_self = "deny"
-wildcard_enum_match_arm = "warn"    # functional-rust: no wildcard arms in domain match
+default_numeric_fallback = "deny"
 missing_errors_doc = "deny"
+missing_panics_doc = "deny"
 missing_const_for_fn = "warn"
-
-# --- Warns (promotion to deny via policy) ---
-shadow_unrelated = "warn"           # no variable shadowing
-print_stdout = "warn"               # use tracing, not println
+shadow_unrelated = "warn"
+print_stdout = "warn"
 print_stderr = "warn"
-default_numeric_fallback = "deny"   # no implicit i32 default
-float_arithmetic = "warn"           # float in hot paths needs care
-rc_buffer = "warn"
-rc_mutex = "warn"
-mod_module_files = "deny"
-self_named_module_files = "deny"
-verbose_file_reads = "warn"
-use_debug = "warn"
+wildcard_enum_match_arm = "warn"  # functional-rust house style
+fn_params_excessive_bools = "warn"  # CORRECTED: not fn_args_justly (doesn't exist)
+
+# NOTE: non_exhaustive_omitted_patterns is the CORRECT lint name (not non_exhaustive_patterns).
+# #[non_exhaustive] FORCES wildcard arms for downstream consumers — the no-wildcard rule
+# needs an exception with explicit rationale for external non_exhaustive enums.
 ```
 
-**What clippy CANNOT express — those rules live in Layer 3 (semgrep), not custom lint code:**
-- No imperative loops (`for`/`while`/`loop`) — clippy has no blanket no-loops lint
-- Nesting depth > 2 — clippy `cognitive_complexity` is advisory, not a hard gate
-- `Result<T, String>` error type — clippy doesn't catch stringly-typed errors
-- Hidden I/O in helper functions — architectural, needs pattern matching
-- `format!`/`to_string()` in `#[xtask::hot]` modules — needs hot-module awareness
+**`#[allow]`/`#[expect]` scan (anti-bypass):** Xtask scans gated source for `#[allow(...)]`, `#[expect(...)]`, `cfg_attr(..., allow(...))`, and `#![allow(...)]`/`#![expect(...)]` attributes. ANY un-ledgered suppression attribute = `BYPASS_ALLOW_ATTRIBUTE` finding → CodeReject. Only the policy file can permit specific allows, and those are recorded in the trusted-base ledger.
 
-Xtask does NOT build custom lint passes or compiler extensions. It wraps clippy at the above strictness and uses semgrep for the remainder. **Wrap tools, don't build them.**
+**`--cap-lints` statement:** Cargo uses `--cap-lints allow` for dependencies. The lint regime applies to FIRST-PARTY source only. This is stated explicitly — transitive crate lint failures are out of scope (cargo-deny/geiger handle supply-chain).
 
-### 5.9 Allowed Library & Crate Policy (Holzman curated stack)
+**Repair-hint caveat:** clippy's own suggestions can conflict with policy (e.g. `get_unwrap` suggests indexing, but indexing is also banned). Xtask generates CUSTOM repair hints, not raw clippy suggestions.
 
-Xtask enforces a curated crate allowlist via `cargo deny` config + clippy `disallowed_methods`/`disallowed_types` + semgrep. Only audited, Holzman-approved crates are permitted. Adding a non-approved crate requires a policy-PR.
+### 6.3 Functional-rust doctrine (honest about decidability)
 
-**Approved crates by purpose:**
-
-| Purpose | Approved crates | Notes |
+| Rule | Enforcement | Honest caveat |
 |---|---|---|
-| Async I/O | `tokio` | No CPU-heavy loops on async workers |
-| HTTP/API | `axum`, `tower`, `tower-http`, `hyper` | Enforce timeouts, limits, tracing |
-| CPU parallelism | `rayon` | Only for large independent work with scaling evidence |
-| Concurrency | `crossbeam-channel`, `parking_lot`, `flume` | Bounded queues only |
-| Buffers | `bytes`, `arrayvec`, `smallvec`, `heapless` | Choose by measured size/lifetime/cache |
-| Arenas | `bumpalo` | Only when many objects share one lifetime |
-| Maps | `hashbrown`, `ahash`, `rustc-hash` | Fast hashers for internal/non-adversarial keys only |
-| Immutable state | `rpds`, `arc-swap` | Structural-sharing snapshots, lock-free reads |
-| Concurrent state | `dashmap` | High-throughput; measured only |
-| Ergonomic pipelines | `itertools`, `tap` | Sync pipelines, linear pipe() flow |
-| Formats (binary) | `postcard` | Default compact Serde-compatible |
-| Formats (zero-copy) | `rkyv` | Audited zero-copy only |
-| JSON | `serde_json` | Default; `sonic-rs`/`simd-json` only when proven bottleneck |
-| Parsing | `winnow`, `nom`, `lexical-core` | Reduce handwritten parser risk |
-| Errors | `thiserror` (core), `anyhow` (shell) | No `Result<T, String>` in core |
-| Checksums | `crc32fast` | Fast non-crypto checksums |
-| Hashing (crypto) | `blake3` | Content-addressing digests |
+| No imperative loops (`for`/`while`/`loop`) | semgrep | This is HOUSE STYLE, not inherently more verifiable/faster. Iterator complexity can replace loop complexity. |
+| ≤2 nesting depth | semgrep | House style; not a universal quality fact. |
+| No `unwrap_or*` family | clippy deny | STYLE rule — `unwrap_or` does NOT panic. |
+| No `Result<T, String>` | semgrep | Catches the pattern; cannot prove error taxonomy quality. |
+| No wildcard arms in domain match | semgrep (warn) | `#[non_exhaustive]` external enums FORCE wildcards — needs exceptions. |
+| No bool control flags | `fn_params_excessive_bools` (warn) | Checks declarations, not every bool. |
+| Parse don't validate | NOT a hard gate | Architectural guidance; admitted in spec. |
+| Zero-copy parsing | NOT enforced | Clippy catches "some" cases; not a gate. |
+| No hidden I/O | NOT decidable by semgrep | A call behind a trait/dependency/callback can do I/O. Needs architecture manifest, not pattern matching. |
+| Make illegal states unrepresentable | NOT mechanically enforced by wildcard ban | Design guidance unless backed by type-state checks. |
+| No recursion | semgrep (syntactic only) | Catches direct recursion; NOT mutual recursion, trait dispatch, fn pointers, macro expansion, or generated code. |
 
-**Banned crates / methods (Reject on sight):**
-- New `bincode` usage (maintenance risk per Holzman)
-- `chrono::Local` direct calls (non-determinism)
-- Raw `rand::random()` / `thread_rng()` direct calls outside a controlled primitive
-- `std::sync::Mutex` in async handler scope (use `parking_lot` or sharding)
-- `std::cell::RefCell` in async/workflow scope
-- Fast non-cryptographic hashers for adversarial/user-controlled keys
-- `async_trait` in hot paths without measurement
-- `mimalloc`/`tikv-jemallocator` only after heap profiling proves allocator pressure remains
+### 6.4 PLUS performance gates (opt-in, honest about runtime)
 
-**Xtask enforcement:** `cargo deny` config with the allowlist; clippy `disallowed_methods`/`disallowed_types` for method/type bans; semgrep for `chrono::Local`/`rand::random`/`std::sync::Mutex` in scope-sensitive positions.
+These are correctness-of-CLAIM gates that require RUNTIME evidence (benchmarks, profiling). This CONTRADICTS any "no runtime" claim — Xtask explicitly runs benchmarks for `#[xtask::hot]` modules. The "no runtime" non-goal refers to executing the gated code's business logic, not to benchmark/profiling tools.
+
+| Extension | Requirement | Honest caveat |
+|---|---|---|
+| Latency budget | Named Criterion benchmark passing p50/p95/p99 threshold | NONDETERMINISTIC — requires hardware spec, load, warmup, sample size, noise threshold, baseline. Without these, CI is "a slot machine wearing a lab coat." |
+| Throughput budget | Named benchmark passing ops/sec threshold | Same nondeterminism caveat. |
+| Allocation budget | heaptrack/DHAT evidence showing count within budget | Runtime instrumentation, not static. |
+| Storage placement | measured stack/heap/arena choice | Architectural review, not a lint. |
+| SIMD discipline | scalar oracle + fallback + target gate + benchmark | unsafe SIMD needs explicit waiver (§6.6). |
+
+**Benchmarking tools Xtask wraps:** Criterion (`criterion = "0.8"`), iai-callgrind (`iai-callgrind = "0.16"` — deterministic instruction counts), hyperfine, perf stat, cargo flamegraph/samply, heaptrack/DHAT/bytehound, cachegrind, cargo bloat, cargo llvm-lines, tokio-console. **No benchmark = `PERF_NO_BENCHMARK` blocker.** Generic `cargo bench` is discovery only — a named target is required.
+
+### 6.5 Supply-chain (honest about tool limits)
+
+| Tool | What it does | What it does NOT do |
+|---|---|---|
+| `cargo audit` | Checks Cargo.lock against KNOWN RustSec advisories | Does NOT catch unknown/undisclosed vulnerabilities. |
+| `cargo deny check` | Advisories + licenses + bans + sources + duplicate versions | Overlaps cargo-audit on advisories (intentional defense-in-depth). |
+| `cargo vet` | Checks third-party deps have audits from trusted entities; reports gaps | NOT a correctness proof. Bootstrap cost is real (first adoption needs human audits or exemptions). |
+| `cargo geiger` | Counts `unsafe` in dependency tree | Counts, does not prove soundness. |
+| `cargo machete` | Detects unused dependencies | EXPLICITLY IMPRECISE per its README — will false-positive. Requires baseline/triage, not blanket reject. |
+| `cargo hack --feature-powerset` | Every feature combo compiles | Does NOT prove all TARGET-specific code compiles (feature ≠ target). |
+
+Supply-chain checks distinguish runtime, build, dev, and proc-macro dependencies — dev/build/proc-macro deps execute in CI even if they don't ship.
+
+### 6.6 Unsafe policy (decided: zero first-party unsafe, waivers through ledger)
+
+v1 is **zero first-party `unsafe`** (`unsafe_code = forbid`). There is NO SIMD waiver, NO FFI safe-wrapper exception, NO raw-pointer accounting in v1. If a genuine FFI/SIMD need arises, it requires a policy-PR that adds the crate to the trusted-base ledger with owner + reason + compensating evidence, and `unsafe_code` is lifted to `deny` (not `forbid`) for that specific crate via a scoped lint config. The default remains forbid.
+
+### 6.7 Pinned toolchain (corrected — version-pinned, not floating)
+
+- `rust-toolchain.toml` with a **version-pinned** channel. "Stable" floats — use an explicit `1.x.y` pin, OR a date-pinned `nightly-YYYY-MM-DD`.
+- `portable_simd` and `try_blocks` are **nightly-only unstable features** — they CANNOT be allowed on a stable-pinned toolchain. If the project pins stable, these are not available. If nightly is required, pin the date and allow only these features via `-Zallow-features`.
+- Components: `rustfmt`, `clippy`, `rust-src`, `llvm-tools-preview`.
+- `RUSTC_BOOTSTRAP` = policy violation.
+- `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` are scanned and constrained (§12).
+
+### 6.8 Strict clippy summary
+
+See §6.2. Key corrections from v2: critical lints use `-F` (forbid) not `-D` (deny) so `#[allow]` cannot override them; `non_exhaustive_omitted_patterns` is the correct lint name; `fn_params_excessive_bools` replaces nonexistent `fn_args_justly`; `#[allow]`/`#[expect]` scan added as anti-bypass.
+
+### 6.9 Allowed library & crate policy
+
+Curated allowlist enforced via `cargo deny` + clippy `disallowed_methods`/`disallowed_types` + semgrep. Adding a non-approved crate requires a policy-PR.
+
+| Purpose | Approved | Banned |
+|---|---|---|
+| Async I/O | `tokio` | — |
+| HTTP | `axum`, `tower`, `tower-http`, `hyper` | — |
+| CPU parallelism | `rayon` (scaling evidence required) | — |
+| Concurrency | `crossbeam-channel`, `parking_lot`, `flume` (bounded) | `std::sync::Mutex` in async scope |
+| Buffers | `bytes`, `arrayvec`, `smallvec`, `heapless` | — |
+| Maps | `hashbrown`, `ahash`, `rustc-hash` (internal keys only) | fast non-crypto hasher for adversarial keys |
+| Formats | `postcard`, `serde_json` | new `bincode` usage |
+| Errors | `thiserror` (core), `anyhow` (shell) | `Result<T, String>` in core |
+| Parsing | `winnow`, `nom`, `lexical-core` | — |
+| Hashing | `blake3`, `crc32fast` | `chrono::Local`, raw `rand::random()` |
 
 ---
 
-## 6. The Enforcement Layers (in execution order)
+## 7. Two-Environment Architecture (signing-key isolation — CRITICAL)
 
-| Layer | Tool(s) | Budget | Rejects | Repair hint |
+**THE SIGNING KEY MUST NEVER EXIST IN ANY ENVIRONMENT THAT EXECUTES A CARGO COMMAND ON UNTRUSTED CODE.**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ VERIFIER ENVIRONMENT (untrusted code executes here)          │
+│                                                              │
+│  Sandbox: network-off, readonly source, frozen PATH,        │
+│  no secrets, CPU/mem limits, fixed env/locale/timezone       │
+│                                                              │
+│  Runs: cargo check/clippy/test/mutants/hack, semgrep,        │
+│        rg, benchmarks, profilers                             │
+│                                                              │
+│  HAS NO SIGNING KEY                                          │
+│                                                              │
+│  OUTPUTS: canonical evidence artifacts + evidence digest     │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ canonical evidence only (no live checkout)
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│ SIGNER ENVIRONMENT (hardened, no code execution)             │
+│                                                              │
+│  Receives ONLY: evidence digest, source digest, artifact     │
+│  digest, policy digest, advisory-db digest                   │
+│                                                              │
+│  HAS THE SIGNING KEY (KMS/HSM or keyless CI identity)        │
+│                                                              │
+│  OUTPUTS: signed Attestation                                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+The signer NEVER receives a live checkout. It receives digests and canonical evidence. It cannot execute code. An attacker who compromises the verifier environment cannot sign — the key isn't there.
+
+---
+
+## 8. The Enforcement Lanes (corrected skip rules + build.rs lane)
+
+| Lane | Tool(s) | Scope | Depends on compile? | Skip rule |
 |---|---|---|---|---|
-| 0 | `cargo fmt --check` | <2s | formatting drift | ReplaceWith |
-| 1 | `cargo check` + rustc lints (`-D warnings`, `unsafe_code` forbid, `unused_must_use` deny, `non_exhaustive_patterns`/`unreachable_patterns` deny, `rust_2018_idioms` deny, `dead_code` deny) | <10s | compile errors, forbidden lints | compiler spans |
-| 2 | `cargo clippy` (the full deny list from 5.2; source-only: `--lib --bins --examples`) | <15s | all panic-surface + footgun lints | clippy lint id + hint |
-| 3 | `semgrep` (.xtask/semgrep/) | <30s | functional-rust structural rules: no imperative loops, >2 nesting, `unwrap_or*`, `Result<_,String>`, wildcard arms, hidden I/O, macro-audit, raw `as` survivors | typed hint (UseIteratorPipeline, FlattenNesting, etc.) |
-| 4 | production-assert-macro scan (`rg` for `assert!`/`assert_eq!`/`assert_ne!`/`unreachable!` outside tests/benches/examples/build.rs) | <2s | panic-path macros in production | RequiresHumanReview |
-| 5 | supply chain: `cargo audit` + `cargo deny check` + `cargo vet` + `cargo geiger` + `cargo machete` | <20s | advisories, banned, unsafe-dep, unused deps | supply findings |
-| 6 | feature correctness: `cargo hack check --workspace --feature-powerset` | <60s | a feature combo breaks | feature findings |
-| 7 | mutation testing: `cargo mutants` | <120s (heavy lane) | surviving mutants | mutation findings |
+| 0 | `cargo fmt --check` | edit | No | always runs |
+| 1 | `cargo check` + rustc lints (`-D warnings`, `-F unsafe_code`, deny `unused_must_use`/`unused_results`/exhaustiveness) | edit | — | always runs |
+| 2 | `cargo clippy` (all groups maxed, §6.2; source-only `--lib --bins`; NOT `--examples`) | edit | Yes | skip if L1 fails |
+| 3 | `semgrep` (.xtask/semgrep/) | edit | **No** | **always runs** (doesn't need compilation) |
+| 4 | assert-macro scan (`rg`) | edit | No | always runs |
+| 4b | **build.rs lane** — stricter scan of build scripts (they EXECUTE during builds) | edit | No | always runs |
+| 5 | supply chain: `cargo audit` + `cargo deny` + `cargo vet` + `cargo geiger` + `cargo machete` (with triage baseline) | prepush | No | always runs in prepush+ |
+| 6 | feature correctness: `cargo hack --feature-powerset` | prepush | **Yes** | skip if L1 fails |
+| 7 | mutation testing: `cargo mutants` (with baseline + equivalent-mutant triage) | full | Yes | skip if L1 fails |
+| 8 | tests: `cargo test` / `cargo nextest run` (plain deterministic tests are a FIRST-CLASS lane) | edit | Yes | skip if L1 fails |
+| 9 | benchmark gate (for `#[xtask::hot]` modules only) | full | Yes | skip if L1 fails; N/A if no hot modules |
 
-**Short-circuit rule:** layers that depend on compilation (3, 7) are `Skipped` if Layer 1 fails. Layers 0–6 are fast and always run. Layer 7 is heavy and may be policy-scoped (run in CI `--scope full`, optional locally) — BUT if scoped-in and unrunnable, it is `GateFailure` → aggregate Reject (fail-closed holds).
-
-**Source vs test:** per Holzman + Moon skill, strict linting is **source-only**. Tests must compile, run, prove behavior with exact assertions, and stay deterministic — but test implementation style is NOT clippy-gated. Layer 4's rg scan explicitly excludes `**/tests/**`, `**/benches/**`, `**/examples/**`, `build.rs`.
+**Corrected from v2:**
+- Lane 3 (semgrep) runs on source REGARDLESS of compilation — it does not need the crate to typecheck. Skipping it on compile failure reduces repair signal.
+- Lane 6 (feature-powerset) depends on compilation — skip if L1 fails, not "always run fast."
+- Lane 2 is `--lib --bins` only (NOT `--examples` — examples are not clippy-gated for style, but DO compile).
+- **build.rs gets its own lane (4b)** — build scripts EXECUTE during builds and are attacker-controllable. They are NOT excluded from scanning.
+- `cargo test` is an explicit first-class lane (was missing in v2).
 
 ---
 
-## 7. The Certificate Model (artifact-bound trust)
+## 9. Sandbox Profile (the verifier environment)
+
+Every Cargo/semgrep/rg/benchmark command in the verifier runs under:
+
+| Control | Value | Why |
+|---|---|---|
+| Network | OFF (no outbound) | Determinism; no dependency fetching, no advisory DB live-fetch |
+| Source tree | READ-ONLY | Build scripts cannot mutate source; compare source digest before/after |
+| Writable | `target/`, `OUT_DIR`, temp only | Build artifacts only |
+| Secrets | ABSENT | No signing key, no tokens, no env secrets |
+| PATH | FROZEN — resolved absolute tool paths from a trusted toolchain dir | No PATH poisoning / tool shadowing |
+| Env vars | Fixed, frozen, digest-bound | `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_NET_OFFLINE=true`, `--locked`, `--frozen` |
+| Locale | Fixed (C/POSIX) | Deterministic output sorting |
+| Timezone | Fixed (UTC) | Deterministic timestamps in tool output |
+| CPU/Memory | Cgroup-capped (Linux) / container limits | Kani/CBMC can OOM; mutants can run away |
+| `.cargo/config.toml` | Included in policy digest, constrained | It can set build flags, wrappers, aliases — it's a policy surface |
+
+**Network-off means:** dependencies must be vendored or `--frozen`/`--locked`. Advisory DBs must be pinned snapshots (their digests in the certificate), not live-fetched. cargo-vet uses `--locked`/`--frozen` modes.
+
+---
+
+## 10. Certificate Model (artifact-bound, fresh, split deterministic/signed)
+
+### 10.1 EvidenceDigest (deterministic — identical input produces identical digest)
 
 ```rust
-pub struct Certificate {
+pub struct EvidenceDigest {
     pub schema_version: u16,
-    pub source_digest: Digest,           // blake3 of gated source tree
+    pub source_digest: Digest,              // blake3 of gated source tree (canonical paths)
     pub cargo_lock_digest: Digest,
-    pub per_layer: Box<[LayerDigest]>,   // each layer's pass evidence digest
-    pub policy_digest: Digest,           // blake3 of all policy files
-    pub toolchain_digest: Digest,        // rust-toolchain.toml + pinned tool versions
-    pub hot_path_module_set_digest: Digest,
-    pub timestamp_utc: DateTime<Utc>,
-    pub signature: Option<Ed25519Signature>, // None = unsigned (local); Some = CI-signed
+    pub dependency_source_digest: Digest,    // vendored dep tree digest (Cargo.lock is NOT the source tree)
+    pub artifact_digest: Option<Digest>,     // blake3 of the built binary/artifact (for deploy-bound certs)
+    pub build_profile: Option<String>,       // "release" / "dev"
+    pub target_triple: Option<String>,
+    pub feature_set: Option<Box<str>>,
+    pub per_lane: Box<[LaneDigest]>,         // each lane's evidence digest
+    pub policy_digest: Digest,               // blake3 of ALL policy files (§11)
+    pub toolchain_digest: Digest,            // hash of RESOLVED BINARIES or hermetic container/OCI digest (not version strings)
+    pub advisory_db_digest: Digest,          // pinned RustSec/deny DB snapshot digest
+    pub cargo_vet_db_digest: Digest,         // pinned vet imports snapshot digest
+    pub env_digest: Digest,                  // frozen env vars
+    pub hot_module_set_digest: Digest,
 }
 ```
 
-- **Ed25519.** CI holds the signing key as a secret. Local runs without the key emit an `unsigned` certificate (valid for repair-loop feedback, NOT deploy-acceptable).
-- **Deploy-gate:** a Moon task that recomputes every digest from the actual artifact + policy + toolchain, compares against the certificate, and requires a CI signature. Mismatch/absent ⇒ deploy REJECTED. If the verifier itself cannot run ⇒ deploy REJECTED (fail-closed).
+`toolchain_digest` hashes the **resolved binaries** (or uses a hermetic Nix/OCI image digest), not version strings — version strings are not supply-chain integrity.
+
+### 10.2 Attestation (non-deterministic, SIGNED — detached over canonical pre-sign payload)
+
+```rust
+pub struct Attestation {
+    pub evidence_digest_hash: Digest,    // blake3 of canonical-serialized EvidenceDigest
+    pub not_before: DateTime<Utc>,
+    pub not_after: DateTime<Utc>,         // FRESHNESS — old certs expire
+    pub policy_epoch: u64,                // increments on policy change; deploy checks current epoch
+    pub key_id: String,                   // which key signed (for rotation/revocation)
+    pub scope: Scope,                     // edit | prepush | full — deploy requires full
+    pub signature: Vec<u8>,               // Ed25519 detached signature over evidence_digest_hash + fields above
+}
+```
+
+The signature is DETACHED over a canonical pre-sign payload (the fields above, canonically serialized). The signature does not sign itself.
+
+**Freshness/revocation:** `not_after` expiry. `advisory_db_digest` in the evidence — if the DB changed since issuance, deploy REJECTS (a dependency may have gained an advisory). `policy_epoch` — if policy evolved, old certs from a prior epoch are stale. `key_id` enables key rotation/revocation.
+
+### 10.3 Scope conflation fix
+
+An attestation encodes `scope`. Deploy-gate REQUIRES `scope = full`. A `scope = edit` attestation (from the fast loop) is NOT deploy-acceptable regardless of signature.
+
+### 10.4 Canonical serialization
+
+JSON map ordering, path separators, absolute paths, ANSI output, locale, and tool-output order can change digests. Xtask uses: **canonical JSON** (sorted keys, no whitespace), **sorted findings** (by lane, rule_id, location), **normalized paths** (workspace-relative, forward-slash), **scrubbed volatile fields** (durations, timestamps stripped from evidence digests), **fixed locale** (C/POSIX), **fixed timezone** (UTC).
 
 ---
 
-## 8. Escape Hatch (policy-PR only)
+## 11. Policy Files (what's in policy_digest)
 
-- **NO per-site bypass.** No inline `#[allow]` for the gated codebase.
-- The ONLY way to ship a file that triggers a rule is to **edit the policy files** (clippy.toml, .xtask/semgrep/, deny.toml, the policy manifest, the hot-path module sets).
-- Editing policy requires a **PR that itself passes the same Xtask gate**.
-- This is the Swamp "policy-guided" principle made mechanical: adaptation is explicit (a diff), inspectable (in the PR), policy-guided (lives in files), artifact-bound (new policy_digest in the certificate).
+ALL of these are hashed into `policy_digest`. Changing ANY requires a policy-PR:
 
----
-
-## 9. Toolchain Requirements (hard-required, pinned, fail-closed)
-
-Xtask shells out to: `cargo`/`rustc`/`rustfmt`/`clippy` (pinned via rust-toolchain.toml), `semgrep`, `cargo-audit`, `cargo-deny`, `cargo-vet`, `cargo-geiger`, `cargo-machete`, `cargo-hack`, `cargo-mutants`, plus `rg` for the assert-macro scan.
-
-- **Quality tools (fmt/clippy/semgrep/audit/deny/vet/geiger/machete/hack)** are hard-required always.
-- **Heavy tools (mutants)** are hard-required **when scoped-in** by policy (`--scope full`). A missing scoped-in tool ⇒ `GateFailure` + Reject + clear "install X" message. No silent degradation.
-- **All versions pinned** and bound into `toolchain_digest`.
-- Local must mirror CI's toolchain. The contributor installs the pinned set.
+```
+clippy.toml
+rustfmt.toml
+.xtask/semgrep/           (all rules)
+deny.toml
+rust-toolchain.toml
+cargo-vet supply-chain/   (vet policy + imports)
+.xtask/policy.toml        (xtask policy manifest: hot-module sets, scope config, budgets)
+.cargo/config.toml        (build flags/wrappers — constrained)
+Cargo.toml [lints]        (workspace lint config)
+```
 
 ---
 
-## 10. Moon CI/CD Integration
+## 12. Bypass-Surface Countermeasures (comprehensive)
+
+The AI author is adversarial. Every known bypass vector and its countermeasure:
+
+| Bypass vector | Countermeasure |
+|---|---|
+| `#[allow(...)]` / `#[expect(...)]` | rg/semgrep scan; un-ledgered = CodeReject. Critical lints use `-F` (forbid) so `#[allow]` cannot lower them. |
+| `cfg_attr(..., allow(...))` | same scan |
+| `#![allow(...)]` / `#![expect(...)]` (crate-level) | same scan |
+| `.cargo/config.toml` (build flags, wrappers) | included in policy_digest; constrained; scanned for `runner`/`rustc-wrapper` overrides |
+| `RUSTFLAGS` / `CARGO_ENCODED_RUSTFLAGS` | scanned; unexpected flags rejected; frozen in env_digest |
+| `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` | scanned; rejected unless explicitly policy-approved |
+| PATH poisoning / tool shadowing | frozen absolute tool paths from trusted toolchain dir |
+| build scripts (`build.rs`) | own lane (4b); stricter scan; readonly source enforced; source digest compared before/after |
+| proc macros (execute during compilation) | acknowledged: proc-macro crates execute attacker code at compile time. Mitigated by: signing key NOT in verifier env (§7); proc-macro deps in supply-chain scan |
+| `include!` / `include_str!` / `include_bytes!` / `#[path]` | canonical module/input discovery; symlink handling; rule forbidding source-tree escapes; included files in source_digest |
+| generated `OUT_DIR` code | `include!(concat!(env!("OUT_DIR"), ...))` scanned and ledgered; generated code is not source-of-truth |
+| `cfg`-gated code (platform-specific) | semgrep parses all cfg branches conservatively; feature-powerset checks feature cfgs; target-specific code flagged (target powerset ≠ feature powerset) |
+| `#[cfg(test)]` modules in `src/*.rs` | not falsely treated as production by path-only exclusion; semantic cfg-aware scanning |
+| semgrep ignore comments | scanned; un-ledgered = CodeReject |
+| cargo-audit `--ignore` / cargo-deny exceptions | scanned in config; un-ledgered = CodeReject |
+| cargo-vet exemptions | scanned in supply-chain/; un-ledgered = CodeReject |
+| cargo-mutants `--exclude` | scanned; un-ledgered = CodeReject |
+| dependency tricks (renamed crates, git deps, path deps) | cargo-deny bans + dependency_source_digest |
+| macro-expanded code (semgrep/rg can't see it) | KNOWN LIMITATION: semgrep/rg over source CANNOT see loops/panics/allocations/unsafe introduced by proc macros or derives. Stated honestly. Partial mitigation: clippy DOES see macro-expanded code. |
+| empty proof obligations | (proofs deferred to future phase) — when added, coverage rules will require obligation existence per policy |
+
+---
+
+## 13. Escape Hatch (anti-circular policy)
+
+**NO per-site bypass.** The only escape is editing policy files (§11). BUT:
+
+**Anti-circularity:** a policy-PR is checked against the **PREVIOUS main-branch policy** (not the weakened policy being introduced). A meta-policy requires:
+- **CODEOWNER approval** on any policy file change.
+- **Explicit diff classification** (tightening / loosening / neutral). Loosening changes are flagged for human review.
+- The policy-PR itself must pass the gate under the PREVIOUS policy.
+
+This prevents: AI weakens policy → weakened policy judges itself → passes → ships.
+
+---
+
+## 14. Deploy-Gate (corrected)
+
+The deploy-gate is a Moon task that runs before deploy. It checks ALL of:
+
+1. **Attestation present** and `scope = full`.
+2. **Signature valid** under `key_id` (and key not revoked).
+3. **Fresh:** `not_before ≤ now ≤ not_after`.
+4. **Evidence matches:** recompute `EvidenceDigest` from the actual artifact + source + policy + toolchain + advisory-db + env. Compare against `evidence_digest_hash`. Mismatch → REJECT.
+5. **Advisory DB current:** `advisory_db_digest` matches the current pinned DB snapshot. If the DB changed (new advisory), → REJECT (re-run the gate).
+6. **Policy epoch current:** attestation's `policy_epoch` matches current. Stale epoch → REJECT.
+7. **Artifact-bound:** if deploying a binary, `artifact_digest` must match the actual binary (reproducible rebuild or signed artifact).
+8. **If the deploy-gate itself cannot run** → REJECT (fail-closed).
+
+Deploy-gate is an EXPLICIT dependency of the deploy target — it does not get skipped by Moon's affected-target logic.
+
+---
+
+## 15. Moon CI/CD Integration (corrected inputs)
 
 ```yaml
 # .moon/tasks/all.yml
-gate:
-  command: 'xtask gate --emit json --out target/xtask/verdict.json'
+gate-edit:
+  command: 'xtask gate --scope edit --emit json --out target/xtask/report.json'
   toolchains: [rust]
   options: { runInCI: true }
-  inputs: ['@globs(sources)', '.xtask/**', 'Cargo.lock', 'rust-toolchain.toml']
-  outputs: ['target/xtask/verdict.json', 'target/xtask/certificate.json']
+  inputs:
+    - '@globs(sources)'
+    - '.xtask/**'
+    - 'Cargo.toml'
+    - 'Cargo.lock'
+    - '**/Cargo.toml'           # workspace manifests
+    - '.cargo/**'               # build config — policy surface
+    - 'rustfmt.toml'
+    - 'clippy.toml'
+    - 'deny.toml'
+    - 'supply-chain/**'         # cargo-vet
+    - 'rust-toolchain.toml'
+  outputs: ['target/xtask/report.json', 'target/xtask/evidence.json']
+
+gate-full:
+  command: 'xtask gate --scope full --emit json --out target/xtask/report.json'
+  # same inputs + fuzz corpora, test seeds, mutant baselines
+  inputs:
+    - '@globs(sources)'
+    - '.xtask/**'
+    - 'Cargo.toml'
+    - 'Cargo.lock'
+    - '**/Cargo.toml'
+    - '.cargo/**'
+    - 'rustfmt.toml'
+    - 'clippy.toml'
+    - 'deny.toml'
+    - 'supply-chain/**'
+    - 'rust-toolchain.toml'
+    - '.xtask/mutants-baseline.json'
+    - '.xtask/advisory-db-snapshot/'
+    - '.xtask/fuzz-corpus/'
 
 deploy-gate:
-  command: 'xtask verify-cert target/xtask/certificate.json --require-signature'
+  command: 'xtask verify-attestation target/xtask/attestation.json --require-signature --require-scope full'
   options: { runInCI: true }
 ```
 
-- `moon ci` is the canonical gate; runs `:gate` on affected targets.
-- Moon's source-lint zero-tolerance (`-W clippy::all`) reinforces Layer 2.
-- Moon's remote cache (bazel-remote) + sccache accelerate re-runs; Xtask's verdict is a cacheable output.
+**Moon cache caveat:** Moon caching replays outputs when declared inputs match. Missing inputs become a trust bug — the input list above is comprehensive. Deploy-gate recomputes against the CURRENT deployment request, not a cached cert.
 
 ---
 
-## 11. Error Taxonomy (exhaustive)
+## 16. Error Taxonomy (corrected)
 
-### Verdict-level (disjoint)
-- `Pass` — certificate emitted.
-- `Reject{findings}` — code violations; AI edits code.
-- `PolicyError` — policy malformed; edit policy.
-- `InputError` — input contract violated.
+### Report root (disjoint)
+`Pass | CodeReject | GateReject | PolicyError | InputError`
 
-### Layer failures (`GateFailure` — infra, do NOT edit code)
-- `ToolMissing`, `ToolCrashed`, `ToolTimeout`, `ToolVersionMismatch`, `PanicInGate`.
+### Lane failures (`GateReject` — infra)
+`ToolMissing | ToolCrashed | ToolTimeout | ToolVersionMismatch | ToolPathPoisoned | PanicInGate`
 
 ### Rule families (`RuleId`)
-- `HOLZMAN_PANIC_*` — unwrap/expect/panic/todo/indexing/assert-macro (5.2)
-- `HOLZMAN_UNSAFE_*` — unsafe/raw-pointer/transmute/as-conversion (5.1 R9)
-- `HOLZMAN_BOUNDS_*` — unbounded loop, missing termination (5.1 R2)
-- `HOLZMAN_CHECKED_*` — ignored Result, arithmetic side effects (5.1 R7)
-- `FUNC_NESTING_*` — >2 nesting depth (5.3)
-- `FUNC_LOOPS_*` — imperative for/while/loop (5.3)
-- `FUNC_TYPES_*` — Result<_,String>, wildcard arm, bool flag (5.3)
-- `SUPPLY_*` — advisory/banned/unsafe-dep/unused-dep (5.5)
-- `MUTANT_*` — surviving mutation (5.6)
+- `HOLZMAN_PANIC_*`, `HOLZMAN_UNSAFE_*`, `HOLZMAN_CHECKED_*`
+- `FUNC_LOOPS_*`, `FUNC_NESTING_*`, `FUNC_STYLE_*` (style, not panic-safety)
+- `SUPPLY_*` (advisory/banned/unsafe-dep/unused-dep/vet-gap)
+- `MUTANT_*` (with triage: real-mutant vs equivalent-mutant vs irrelevant)
+- `PERF_*` (no-benchmark / regression / allocation-over)
+- `BYPASS_*` (allow-attribute / cfg-attr-allow / semgrep-ignore / cargo-ignore / tool-wrapper / source-escape / out-dir-include)
+- `POLICY_*` (malformed policy / circular-policy-change)
 
-### Certificate errors (deploy-gate)
-- `CertAbsent`, `CertUnsigned`, `DigestMismatch`, `PolicyDigestMismatch`, `ToolchainDigestMismatch`.
+### Severity
+If all findings reject, there is no "Warning" severity — findings either reject or they don't. `Severity` is removed from the model. A finding either causes `CodeReject` or is informational (not a finding). No decorative severity.
 
----
-
-## 12. Second-Order & Pre-Mortem
-
-**Blast radius:**
-- CI signing key leak ⇒ forged certs. Mitigation: key rotation + deploy-gate recomputes digests (forged signature against mismatched artifact still fails).
-- Deploy-gate verifier bug ⇒ false-accept. Mitigation: verifier is Xtask-gated code; digest recompute is a pure function with property tests.
-- Slow heavy lanes (mutants) ⇒ AI repair loop stalls. Mitigation: heavy lane policy-scoped; the fast lanes (0–6) give the AI immediate signal.
-- Policy-PR used to weaken rules ⇒ the weakening is itself a visible, auditable PR with a new policy_digest.
-
-**3 AM disaster:** bad code shipped. Most likely cause: a property Xtask **cannot** statically prove — e.g. a logical correctness bug that passes all lints/tests/mutations. Xtask guarantees code *quality discipline*, not *behavioral correctness* of the algorithm. The honest boundary: Xtask proves the code is disciplined and panic-free; it does not prove the code does the right thing. Tests + mutants narrow that gap; they do not close it. The certificate records which lanes ran so incident response knows the quality floor.
-
-**The invariant that must NEVER break:** fail-closed. Any path that can emit Pass without all scoped layers verifiably passing kills the product.
+### Repair-path honesty
+The three buckets (code/gate/policy) are the REPORT-level split. Individual findings CAN have mixed repair paths (a cargo-audit finding may need a dep update OR a policy exception OR a code change). The `RepairHint` enum carries the specific action; the report-level bucket is the routing decision, not a claim that every finding has exactly one fix path.
 
 ---
 
-## 13. The Honest Trust Boundary
+## 17. Second-Order & Pre-Mortem (corrected)
 
-Xtask makes it mechanically impossible to ship Rust that violates any **decidable** property in the Holzman + functional-rust doctrine — panic freedom, unsafe absence, exhaustiveness, checked returns, bounded loops, no imperative loops, supply-chain hygiene, mutation resistance, and feature-combo compilation. That is a vast, genuinely unbeatable set.
+**Key-leak mitigation (CORRECTED from v2):** "digest recompute" does NOT mitigate a leaked key — an attacker can sign a malicious artifact whose digests match that malicious artifact. Real mitigation: key revocation, KMS/HSM or keyless CI identity (Sigstore), transparency logging (Rekor), branch-protected signing policy, and separation from untrusted execution (§7).
 
-Xtask does **not** prove behavioral correctness (the algorithm is right) — no static tool does. Tests + cargo-mutants narrow this; they never close it. The certificate is the quality floor, not a correctness proof.
+**3 AM disaster (most likely):** A logical correctness bug that passes all lints/tests/mutations but is semantically wrong. Xtask enforces DISCIPLINE against a pinned policy — it does not prove the algorithm is correct. The attestation records which lanes ran, so incident response knows the quality floor.
 
----
+**Macro-expanded code blind spot:** semgrep/rg cannot see code generated by proc macros or derives. Clippy CAN see it. This is a known residual — a proc macro could generate an `unwrap()` that semgrep misses but clippy catches (if the lint applies post-expansion).
 
-## 14. Component / Module Map (for decomposition)
-
-Single Cargo workspace. Proposed crates (decomposer refines):
-
-- `xtask-bin` — CLI entrypoint (clap). Subcommands: `gate`, `verify-cert`, `doctor`.
-- `xtask-core` — domain types: `Verdict`, `Finding`, `Layer`, `RuleId`, `RepairHint`, `Span`, `Severity`, `Certificate`, `LayerOutcome`, `LayerFailure`.
-- `xtask-policy` — policy loading, validation, rule catalog, module-set loading (hot-path sets), `policy_digest`.
-- `xtask-layers` — the layer runners; each wraps a tool, parses output, maps to Findings:
-  - `fmt`, `rustc`, `clippy`, `semgrep`, `assert_scan`, `supply` (audit/deny/vet/geiger/machete), `feature` (hack), `mutants`
-- `xtask-certificate` — Ed25519 signing/verification, digest computation, serialization.
-- `xtask-output` — verdict JSON schema, `doctor` diagnostics.
-
-All first-party crates enforce the Holzman/functional-rust lint policy on themselves (Xtask eats its own dog food — it must pass its own gate).
+**Build-script mutation:** a build script could modify the source tree during compilation. Mitigated by readonly source (§9) + source-digest comparison before/after.
 
 ---
 
-## 15. CLI Surface
+## 18. The Honest Trust Boundary (corrected — no overclaiming)
+
+Xtask makes it mechanically impossible to ship first-party Rust that violates any **decidable property in the pinned policy** — panic-surface constructs, unsafe, indexing, arithmetic side-effects, supply-chain advisories, feature-combo compilation, and mutation resistance (with triage).
+
+**What Xtask does NOT guarantee:**
+- Behavioral correctness (the algorithm is right) — no static tool proves this.
+- All UB freedom — Miri observes particular executions only; Kani can run out of resources.
+- Macro-expanded code quality — semgrep/rg are blind to proc-macro output (clippy partially covers).
+- Unknown vulnerabilities — cargo-audit checks KNOWN advisories only.
+- Concurrency soundness — Loom requires deterministic tests using Loom sync types; it cannot prove arbitrary concurrent Rust.
+- That `unwrap_or` is a panic risk — it isn't; banning it is house style.
+
+The attestation is a **quality floor for a pinned policy**, not a correctness proof or omniscience claim.
+
+---
+
+## 19. Component / Module Map
+
+Single Cargo workspace (decomposer refines):
+- `xtask-bin` — CLI (clap). Subcommands: `gate`, `verify-attestation`, `doctor`.
+- `xtask-core` — domain types: `Report`, `Finding`, `Lane`, `RuleId`, `RepairHint`, `Location`, `LaneOutcome`, `SkipReason`, `LaneFailure`, `LaneEvidence`.
+- `xtask-policy` — policy loading, validation, policy_digest, hot-module sets, meta-policy (CODEOWNER, diff classification).
+- `xtask-lanes` — lane runners: `fmt`, `rustc`, `clippy`, `semgrep`, `assert_scan`, `build_rs_scan`, `supply`, `feature`, `mutants`, `test`, `benchmark`.
+- `xtask-sandbox` — sandbox enforcement: network-off, readonly source, frozen PATH, fixed env, cgroup caps.
+- `xtask-evidence` — canonical serialization, `EvidenceDigest` computation, `LaneEvidence`.
+- `xtask-signer` — `Attestation` signing/verification, Ed25519, canonical pre-sign payload, key_id, revocation.
+- `xtask-bypass` — bypass-surface scans (§12): allow-attribute scan, cfg-attr scan, tool-wrapper scan, source-escape scan.
+- `xtask-output` — report JSON schema (versioned), `doctor` diagnostics.
+
+All first-party crates pass their own gate (dogfooded).
+
+---
+
+## 20. CLI Surface
 
 ```
-xtask gate [--input <crate|diff>] [--emit json] [--out <path>] [--scope fast|full]
-    Run layers. fast = layers 0–6 (default for AI loop). full = +mutants (CI).
-    Emit verdict JSON + exit code. Emit certificate on Pass.
+xtask gate [--input <crate|diff>] [--scope edit|prepush|full] [--emit json] [--out <path>]
+    Run scoped lanes. Emit report JSON + exit code. Emit evidence artifacts on Pass.
 
-xtask verify-cert <cert.json> [--require-signature]
-    Recompute digests; verify signature. Deploy-gate primitive.
+xtask verify-attestation <attestation.json> [--require-signature] [--require-scope full]
+    Deploy-gate: recompute digests, verify signature, check freshness/epoch/advisory-db.
 
-xtask doctor
-    Enumerate required tools, versions, health. Fail-closed report.
+xtask doctor [--scope <scope>]
+    Report required tools for the CURRENT scope/policy (not all tools blindly).
+    Fail-closed health report.
 ```
 
-- Exit codes: `0` Pass, `1` Reject, `2` PolicyError, `3` InputError, `>=4` GateFailure/internal.
+Exit codes: `0` Pass, `1` CodeReject, `2` GateReject, `3` PolicyError, `4` InputError, `>=5` internal.
 
 ---
 
-## 16. Definition of Done (Xtask v1)
+## 21. Definition of Done (v1)
 
-1. `xtask gate --scope fast` runs layers 0–6 and emits the disjoint verdict JSON + exit code.
-2. `xtask gate --scope full` adds mutants (CI path).
-3. A Pass emits a valid Ed25519 certificate binding all digests; CI signs it.
-4. Any unrunnable scoped layer forces aggregate Reject with no certificate (fail-closed, verified by test).
-5. The full Holzman panic-free + functional-rust no-loops/no-nesting doctrine is encoded and enforced.
-6. The verdict's three failure categories (CodeViolation / GateFailure / PolicyError) are type-disjoint (compile-enforced).
-7. The only escape is a policy-PR (no inline bypass).
-8. Moon tasks `:gate` and `:deploy-gate` are wired; `moon ci` runs the canonical gate.
-9. Xtask's own source passes its own gate (dogfooded).
-10. Killer demo: AI writes Rust with a `for` loop + `.unwrap()` → `xtask gate` rejects with typed `UseIteratorPipeline` + `HOLZMAN_PANIC_UNWRAP` hints → AI fixes to iterator pipeline + `match` → gate passes → certificate emitted → deploy-gate accepts.
+1. `xtask gate --scope edit` runs lanes 0–4b+8 and emits the disjoint `Report` JSON.
+2. `xtask gate --scope full` adds supply/feature/mutants/benchmark lanes.
+3. Two-environment architecture: verifier sandbox runs all Cargo commands with NO signing key; signer signs canonical evidence only.
+4. `EvidenceDigest` (deterministic) + `Attestation` (signed, fresh, scope-encoded, artifact-bound) replace the old monolithic certificate.
+5. Deploy-gate checks: signature, freshness (`not_after`), advisory-db-digest, policy-epoch, artifact-digest, scope=full.
+6. Any unrunnable scoped lane → `GateReject` (fail-closed).
+7. Full Holzman panic-free + functional-rust doctrine encoded with TOOL-CORRECT lint names.
+8. Critical lints use `-F` (forbid); `#[allow]`/`#[expect]` bypass scan active.
+9. Anti-circular policy: policy-PRs checked against PREVIOUS main policy + CODEOWNER approval.
+10. Sandbox: network-off, readonly source, frozen PATH, no secrets.
+11. Bypass-surface scans (§12) active for all known vectors.
+12. Xtask's own source passes its own gate.
+13. Killer demo: AI writes Rust with `.unwrap()` + `for` loop → `xtask gate --scope edit` rejects with `Patch`/`UseIteratorPipeline` hints → AI fixes → gate passes → full gate passes → attestation signed in signer env → deploy-gate accepts.
 
 ---
 
-## 17. References (read in full)
+## 22. v2 → v3 Issue Mapping (the black-hat review, addressed)
 
-- `holzman-rust/SKILL.md`
-- `holzman-rust/references/nasa-jpl-standards.md` — Power of Ten + PLUS mapped to Rust
-- `holzman-rust/references/latency-throughput-playbook.md` — workload/storage/allocation discipline
-- `holzman-rust/references/runtime-performance-architecture.md` — prove-slow/execute-fast, dense IR, bounded runtime
-- `holzman-rust/references/zero-cost-abstractions.md` — allocation/dispatch/layout cost ledger
-- `holzman-rust/references/simd-patterns.md` — safe SIMD + unsafe-waiver rejection
-- `holzman-rust/references/mechanical-empathy-toolchain.md` — second-ring evidence lanes
-- `functional-rust/SKILL.md`
-- `functional-rust/references/scott-ddd-types.md` — type-driven DDD, parse-don't-validate
-- `functional-rust/references/typing-refactor-checklist.md` — no-loops/nesting/error discipline checks
-- `functional-rust/references/complete-workflow.md` — Data→Calc→Actions worked example
-- `moon-v2/SKILL.md` — canonical `moon ci` gate, source-lint zero-tolerance
+**FATAL security:**
+- Signing key in untrusted env → §7 two-environment split, key NEVER in verifier.
+- Certificate not artifact-bound → §10.1 `artifact_digest`, build profile, target triple, feature set.
+- `timestamp_utc` breaks determinism → §10 split `EvidenceDigest` (deterministic) + `Attestation` (non-det, signed, detached).
+- No freshness/revocation → §10.2 `not_before`/`not_after`/`advisory_db_digest`/`policy_epoch`/`key_id`.
+- Key-leak mitigation wrong → §17 corrected: revocation, KMS/HSM/keyless, transparency logging.
+- Policy circular → §13 anti-circular: previous-policy + CODEOWNER + diff classification.
+- Command injection via proof-obligations → proofs deferred; when added, closed schema `{verifier, package, target, harness, bounds, flags}`, no command strings.
+- "AI cannot route around" → §12 comprehensive bypass countermeasures; §1 adversarial threat model.
+
+**Structural:**
+- Root enum → §5.1 `Report = Pass | CodeReject | GateReject | PolicyError | InputError`.
+- `TopLevelError` not in root → folded into `Report`.
+- `Skipped` underspecified → §5.2 four `SkipReason` variants.
+- Warning severity meaningless → §16 removed; findings reject or they're informational.
+- Certificate.signature: Option awkward → §10.2 detached signature over canonical pre-sign payload.
+- Span mandatory → §5.3 `Location` sum type.
+- RepairHint lifetimes → §5.4 serializable `#[derive(Serialize, Deserialize)]`.
+
+**Contradictions:**
+- "No runtime" → §6.4 honest: benchmarks ARE runtime; "no runtime" = no business-logic execution.
+- "No macros" → §2 corrected: "no Xtask-specific authoring macros"; ordinary Rust macros allowed through policy.
+- "Layers 0-6 always run" vs "L3 skipped" → §8 corrected: L3 (semgrep) runs regardless of compilation.
+- L2 source-only vs --examples → §8 corrected: `--lib --bins` only.
+- L4 excludes build.rs → §8 lane 4b: build.rs gets its own stricter lane.
+- Fast cert vs full cert → §10.3 scope encoded in attestation; deploy requires full.
+- Layer 9 vs 10 (reject vs ledger trust) → proofs deferred; when added, ledger DEGRADES claim, doesn't disappear.
+
+**Tool correctness:**
+- `non_exhaustive_patterns` → `non_exhaustive_omitted_patterns` (§6.2).
+- `fn_args_justly` → `fn_params_excessive_bools` (§6.2).
+- `clippy::all` insufficient → all groups denied + restriction (§6.2).
+- `-W` not `-D` → critical lints use `-F` (forbid) (§6.2).
+- `#[allow]` overrides `-D` → §6.2 `-F` + allow-scan.
+- `--cap-lints allow` for deps → §6.2 stated: first-party source only.
+- `unwrap_used` doesn't catch `unwrap_or*` → §6.2 separate denies; `unwrap_or` is STYLE not panic-safety.
+- `panic_in_result_fn` can't prove no panics → §6.1 honest caveat.
+- `unused_must_use` limited → §6.1 add `unused_results`.
+- `portable_simd`/`try_blocks` nightly-only → §6.7 corrected: can't be on stable pin.
+- "Pinned stable" floats → §6.7 version-pinned `1.x.y` or date-pinned nightly.
+- `cargo machete` imprecise → §6.5 baseline/triage, not blanket reject.
+- `cargo vet` not proof → §6.5 honest.
+- `cargo audit` known-only → §6.5 honest.
+- Kani not blanket proof → proofs deferred; honest caveats in §18.
+- Miri not proof → §6.5/§18 honest.
+- Loom intrusive → §18 honest.
+
+**Static-analysis gaps:**
+- Macro-expanded code blind spot → §12/§17 honest: semgrep blind, clippy partial.
+- Regex false positives → §4 canonical scanning, cfg-aware.
+- `#[cfg(test)]` in src → §12 cfg-aware scanning.
+- cfg-gated code → §12 conservative parse; target ≠ feature powerset.
+- `include!`/`#[path]` → §12 canonical discovery + source-escape ban.
+- OUT_DIR code → §12 scanned and ledgered.
+- `.cargo/config.toml` → §9/§11 policy surface, constrained, in digest.
+- RUSTFLAGS/WRAPPER/PATH → §9/§12 scanned, frozen, rejected.
+- Tool-native suppressions → §12 all modeled.
+
+**Certificate/deploy:**
+- No canonical serialization → §10.4 canonical JSON, sorted, normalized.
+- LaneOutcome::Pass lacks evidence → §5.5 `LaneEvidence`.
+- toolchain_digest vague → §10.1 resolved-binary hash or OCI digest.
+- External DBs not pinned → §10.1 `advisory_db_digest`/`cargo_vet_db_digest`.
+- Network breaks determinism → §9 network-off, `--locked`/`--frozen`, vendored.
+- No dependency source digest → §10.1 `dependency_source_digest`.
+- Moon cache replay → §15 comprehensive inputs; deploy recomputes.
+- Moon affected-target → §14 deploy-gate explicit dependency.
+
+**Operational:**
+- Fast loop not fast → §3 scope tiers (edit/prepush/full).
+- Time budgets fantasy → §3 SLOs scaled by crate size, not correctness gates.
+- cargo vet bootstrap → §6.5 noted.
+- cargo mutants equivalent-mutant → §6.5/§16 triage states.
+- Tests not first-class → §8 lane 8 explicit.
+- cargo check not a build → §10.1 artifact_digest + build for deploy-bound certs.
+- Build scripts mutate source → §9 readonly source + digest compare.
+- Signing key absent from Cargo jobs → §7 explicit invariant.
+- Tool PATH frozen → §9.
+- No sandbox → §9 full profile.
+- No schema versioning → §5.4/§10 schema_version on report + evidence.
+- PROOF_LAUUNDERING typo → §16 corrected to BYPASS_* / POLICY_* families.
+- doctor policy-aware → §20 `--scope` aware.
+- No threat model → §1.
+- No adoption profile → honest: general Rust projects won't accept zero-loops/zero-unwrap_or/cargo-vet from day one; staged rollout is a future concern, not a v1 gate.
+
+---
+
+## 23. References (read in full)
+
+- `holzman-rust/SKILL.md` + all 6 references (nasa-jpl-standards, latency-throughput-playbook, runtime-performance-architecture, zero-cost-abstractions, simd-patterns, mechanical-empathy-toolchain)
+- `functional-rust/SKILL.md` + all 3 references (scott-ddd-types, typing-refactor-checklist, complete-workflow)
+- `moon-v2/SKILL.md` — canonical `moon ci` gate
+- Proof skills (read for context, deferred from v1): verus, kani, flux-rs, loom, miri, rust-fuzzer, formal-verifier, proof-planner, rust-contract
