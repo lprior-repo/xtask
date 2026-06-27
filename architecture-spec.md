@@ -1,6 +1,7 @@
 # Architecture Spec: Xtask — The Deterministic Rust Quality Gate
 
-> Status: ARCHITECTURE SPEC v4.0 — proof machinery removed, honest evidence gate
+> Status: ARCHITECTURE SPEC v5.0 — chain-of-custody hardened, phased
+> v5 fixes: trusted-runner bootstrap, signer provenance, evidence isolation, artifact build lane, source-only clippy, `--frozen` hermeticity, mixed-failure Report, LaneEvidence split, canonical types, phased DoD.
 > Next step: run `arch-spec-to-beads` to shred this into molecular tasks.
 
 ---
@@ -9,108 +10,96 @@
 
 ```
 Xtask is a deterministic Rust quality gate for AI-authored code. It runs a
-pinned, hermetic toolchain over real Rust crates and emits a structured verdict
-plus a signed certificate only when every policy-selected lane passes. It
+pinned, hermetic toolchain over real Rust crates and emits a structured report
+plus a signed attestation (CI only) when every policy-selected lane passes. It
 enforces panic-surface discipline, unsafe restrictions, lint zero-tolerance,
 functional-style structural rules, supply-chain hygiene, feature-matrix
 compilation, tests, and mutation-resistance. It does not prove behavioral
 correctness; it certifies conformance to a checked-in quality policy.
 ```
 
-Xtask is not a theorem prover. It is a deterministic evidence gate. It makes low-discipline Rust expensive to submit, easy for an AI to repair, and impossible to deploy without a signed record of exactly which quality checks passed.
+Xtask is not a theorem prover. It is a deterministic evidence gate with a chain of custody.
 
 ---
 
 ## 1. Threat Model
 
-**The AI code author is potentially MALICIOUS, not merely buggy or careless.**
+**The AI code author is potentially MALICIOUS.** Design assumes attempts via `#[allow]`, `.cargo/config.toml`, build scripts, proc macros, `include!`/`#[path]`, `cfg`-gated code, PATH poisoning, tool-native suppressions, generated code, dependency tricks, cache poisoning, and evidence tampering.
 
-The design assumes the author will attempt to bypass the gate via: `#[allow]`/`#[expect]`, `.cargo/config.toml`, build scripts, proc macros, `include!`/`#[path]`, `cfg`-gated code, PATH poisoning, tool-native suppressions (semgrep ignores, cargo-audit `--ignore`, cargo-vet exemptions, cargo-mutants `--exclude`), generated code, and dependency tricks.
+**The signing key is a crown-jewel secret.** Cargo executes repository-controlled code through build scripts, proc macros, tests, and mutation harnesses. The signing key NEVER exists in any environment that runs a Cargo command on untrusted code (§9).
 
-**The signing key is a crown-jewel secret.** Cargo executes repository-controlled code through build scripts, proc macros, tests, examples, and mutation harnesses. The signing key must NEVER exist in any environment that runs a Cargo command on untrusted code. See §9 (two-environment architecture). Dropping the proof layer does NOT let you drop this hardening.
-
-**Xtask's own source is trusted** (gated by itself, reviewed). The GATED code is untrusted.
+**Xtask's own source is trusted but NOT self-approving.** A PR that modifies Xtask cannot be gated by the Xtask built from that PR — that is recursion wearing a badge (§7.1).
 
 ---
 
 ## 2. Non-Goals
 
-- **NO Xtask-specific authoring macros or DSL.** Ordinary Rust macros (`thiserror`, `serde`/`clap` derives, `assert!` in tests) are allowed through policy.
-- **NO LLM inside the gate.** The AI is external; it consumes the verdict JSON.
-- **NO formal verification, proofs, bounded model checking, refinement types, UB interpreters, or concurrency model checking in v1.** Xtask does not claim to prove algorithmic correctness, memory-model correctness, concurrency correctness, or semantic equivalence.
-- **NO bypass flag.** No `--force`. The only escape is a policy-PR checked against the PREVIOUS policy plus a meta-policy (§14).
-- **NO code generation as source of truth.** Xtask emits typed repair hints, never the author's final code.
-- **NO claim of omniscience.** Xtask certifies conformance to a pinned policy; it does not prove behavioral correctness.
+- **NO Xtask-specific authoring macros or DSL.** Ordinary Rust macros allowed through policy.
+- **NO LLM inside the gate.** AI is external; consumes report JSON.
+- **NO formal verification, proofs, bounded model checking, refinement types, UB interpreters, or concurrency model checking in v1.**
+- **NO bypass flag.** The only escape is a policy-PR checked against the PREVIOUS policy (§14).
+- **NO claim of omniscience.** Xtask certifies conformance to a pinned policy.
 
 ---
 
-## 3. Positioning — The AI OODA Loop + Scope Tiers
+## 3. Terminology (consistent throughout)
 
-```
-OBSERVE   AI reads context, existing code, Xtask's prior verdict
-ORIENT    AI generates candidate Rust
-DECIDE    Xtask gate — runs the toolchain in a sandbox, emits verdict + certificate
-ACT       Accepted code (valid, fresh, signed certificate) ships
-```
+| Term | Meaning |
+|---|---|
+| **Evidence** | Deterministic, unsigned record: source/policy/toolchain/artifact/layer digests. |
+| **Attestation** | Signed statement over Evidence (Ed25519, CI only). |
+| **Certificate** | User-facing bundle = Evidence + Attestation. |
+| **Report** | Per-invocation structured output (pass/reject + findings). Local, unsigned. |
 
-The AI is the primary invoker, running Xtask repeatedly in a repair loop.
+---
 
-**Scope tiers (the "edit" loop is actually fast — no supply chain or feature powerset):**
+## 4. Scope Tiers
 
 | Scope | Lanes | Use case |
 |---|---|---|
-| `edit` | fmt, check, clippy, semgrep, panic/assert scan | AI repair loop (dozens of iterations) |
+| `edit` | fmt, check, clippy (source-only), semgrep, panic/assert+build.rs scan | AI repair loop |
 | `prepush` | edit + tests + supply chain + feature matrix | before push |
-| `full` | prepush + mutation testing | CI / deploy-gate |
+| `full` | prepush + artifact build + mutation testing | CI / deploy-gate |
 
 ```
-edit     = fmt + check + clippy + semgrep + panic/assert scan
-prepush  = edit + tests + supply chain + feature matrix
-full     = prepush + mutation testing
+edit     = fmt + check + clippy(source) + semgrep + panic/assert+build.rs scan
+prepush  = edit + cargo test + supply chain + feature matrix
+full     = prepush + artifact build + cargo mutants
 ```
-
-Do NOT call layers 0–6 "fast" if supply-chain and feature powerset are included. They aren't fast. The `edit` scope is fast.
 
 ---
 
-## 4. EARS Requirements
+## 5. Domain Model (corrected — mixed failures, canonical types)
 
-### Event-driven
-- **When** the AI submits a crate or diff, **the system shall** run the scoped lanes, short-circuiting ONLY compilation-dependent lanes when Layer 1 (check) fails. Semgrep (Layer 3) runs on source REGARDLESS of compilation status — it does not need the crate to typecheck, and skipping it on compile failure reduces repair signal.
-- **When** any scoped lane cannot produce a result (tool crash, timeout, missing binary), **the system shall** emit a `GateReject` with no certificate.
-- **When** all scoped lanes emit clean, **the system shall** emit `Pass`, compute the evidence digest, and write canonical evidence artifacts. Signing happens in a SEPARATE environment (§9).
-
-### State-driven
-- **While** a certificate is valid, fresh (within `expires_at`), and its evidence digest matches the current artifact+policy+advisory-db, **the deploy-gate shall** permit deployment.
-- **If** the advisory DB has changed since the certificate was issued, **the deploy-gate shall** REJECT regardless of signature validity.
-
-### Unwanted
-- **If** the signing key is present in any environment that executes a Cargo command on untrusted code, **the system design is BROKEN.** This is an invariant (§9).
-- **If** a tool-native suppression (`#[allow]`, `#[expect]`, semgrep ignore, cargo-audit ignore, etc.) is found in gated source, **the system shall** flag it unless explicitly policy-approved.
-
----
-
-## 5. Domain Model
-
-### 5.1 The verdict type — single disjoint root enum
+### 5.1 Report — single disjoint root, can contain BOTH code findings AND gate failures
 
 ```rust
 pub enum Report {
-    Pass { evidence: EvidenceDigest, per_lane: Box<[LaneOutcome]> },
-    CodeReject { findings: Box<[Finding]>, per_lane: Box<[LaneOutcome]> },
-    GateReject { failures: Box<[LaneFailure]>, per_lane: Box<[LaneOutcome]> },
-    PolicyError(PolicyDiagnostic),
-    InputError(InputDiagnostic),
+    Pass {
+        evidence: EvidenceDigest,
+        evidence_path: WorkspacePath,
+        per_lane: Box<[LaneOutcome]>,
+    },
+    Reject {
+        code_findings: Box<[Finding]>,
+        gate_failures: Box<[LaneFailure]>,
+        per_lane: Box<[LaneOutcome]>,
+        kind: RejectKind,           // CodeOnly | GateOnly | Mixed
+    },
+    PolicyError { diagnostics: Box<[PolicyDiagnostic]> },
+    InputError { diagnostics: Box<[InputDiagnostic]> },
 }
+
+pub enum RejectKind { CodeOnly, GateOnly, Mixed }
 ```
 
-`CodeReject` = the Rust is wrong (AI edits code). `GateReject` = a tool crashed/missing/timeout (AI does NOT edit code). `PolicyError` = policy malformed (edit policy). These are type-disjoint with disjoint fix paths.
+A real run CAN produce both: semgrep finds `#[allow]` AND cargo-mutants is missing. The Report carries both; `kind` tells the AI whether to fix code, report infra, or both.
 
-### 5.2 Lane outcomes
+### 5.2 Lane outcomes + skip reasons
 
 ```rust
 pub enum LaneOutcome {
-    Clean { evidence: LaneEvidence },
+    Clean { evidence: DeterministicLaneEvidence, telemetry: ObservedLaneTelemetry },
     Findings(Box<[Finding]>),
     Failed(LaneFailure),
     Skipped(SkipReason),
@@ -124,9 +113,83 @@ pub enum SkipReason {
 }
 ```
 
-### 5.3 Finding
+### 5.3 Lane evidence SPLIT — deterministic vs telemetry
 
 ```rust
+// Deterministic — part of the Evidence digest
+pub struct DeterministicLaneEvidence {
+    pub command: CommandEvidence,        // argv array, not shell string
+    pub tool_digest: Digest,             // hash of resolved binary or OCI image layer
+    pub env_digest: Digest,              // frozen env vars
+    pub input_digest: Digest,            // digest of lane inputs (source, lockfile, etc.)
+    pub parsed_result_digest: Digest,    // digest of parsed tool output (findings/result)
+}
+
+// Telemetry — in the Report, NOT in the Evidence digest
+pub struct ObservedLaneTelemetry {
+    pub duration_ms: u64,
+    pub max_rss_bytes: u64,
+    pub exit_status: ProcessTermination,
+    pub stdout_excerpt: Option<String>,  // truncated, for debugging
+    pub stderr_excerpt: Option<String>,
+}
+```
+
+### 5.4 ProcessTermination (not just exit code)
+
+```rust
+pub enum ProcessTermination {
+    Exited { code: i32 },
+    Signaled { signal: i32 },
+    TimedOut,
+    MemoryLimitExceeded,
+    SandboxViolation { reason: String },
+    SpawnFailed,
+}
+```
+
+### 5.5 CommandEvidence (argv, not shell string)
+
+```rust
+pub struct CommandEvidence {
+    pub executable: AbsolutePath,        // resolved absolute path, no PATH lookup
+    pub argv: Box<[String]>,
+    pub cwd: WorkspacePath,
+}
+```
+
+### 5.6 Canonical path/text types
+
+```rust
+/// Normalized UTF-8 workspace-relative path. No backslashes, no `..`, no symlink escape.
+pub struct WorkspacePath(String);
+
+/// Byte offsets over UTF-8 source bytes. Deterministic patching.
+pub struct TextRange { pub start_byte: u32, pub end_byte: u32 }
+
+/// Digest with algorithm tag + lowercase hex.
+pub struct Digest { pub algorithm: DigestAlgorithm, pub hex: String } // Blake3, 64 chars
+```
+
+Line/column convention: 1-based lines, 0-based columns, counting Unicode scalar values. Byte offsets in TextRange are the canonical patch coordinate.
+
+### 5.7 Location (sum type — many findings are not spans)
+
+```rust
+pub enum Location {
+    Span { file: WorkspacePath, start: TextPos, end: TextPos },
+    Dependency { crate_name: String, version: String },
+    Manifest { file: WorkspacePath },
+    Workspace,
+    Tool { name: String, version: String },
+    Artifact { digest: Digest },
+}
+```
+
+### 5.8 Finding + RepairHint
+
+```rust
+#[derive(Serialize, Deserialize)]
 pub struct Finding {
     pub lane: Lane,
     pub rule_id: RuleId,
@@ -135,19 +198,6 @@ pub struct Finding {
     pub repair: RepairHint,
 }
 
-pub enum Location {
-    Span { file: PathBuf, line_start: u32, col_start: u32, line_end: u32, col_end: u32 },
-    Dependency { crate_name: String, version: String },
-    Manifest { file: PathBuf },
-    Workspace,
-    Tool { name: String, version: String },
-    Artifact { digest: Digest },
-}
-```
-
-### 5.4 Repair hints (serializable, JSON-friendly)
-
-```rust
 #[derive(Serialize, Deserialize)]
 pub enum RepairHint {
     Patch { file: String, range: TextRange, replacement: String },
@@ -160,566 +210,513 @@ pub enum RepairHint {
 }
 ```
 
-### 5.5 Lane evidence
+### 5.9 LaneFailure categories (GateReject is not always "don't edit code")
 
 ```rust
-pub struct LaneEvidence {
-    pub command: String,
-    pub tool_path_hash: Digest,
-    pub tool_version: String,
-    pub env_digest: Digest,
-    pub stdout_digest: Digest,
-    pub stderr_digest: Digest,
-    pub duration_ms: u64,
-    pub exit_status: i32,
-    pub parsed_result_digest: Digest,
+pub enum LaneFailure {
+    InfraFailure { tool: String, reason: String },           // missing binary, version mismatch
+    ToolFailure { tool: String, termination: ProcessTermination }, // crashed on input
+    ResourceFailure { tool: String, limit: String },         // timeout, memory cap
+    SuspiciousFailure { tool: String, evidence: String },    // likely hostile input/build-script
 }
 ```
 
+`SuspiciousFailure` — the AI MAY need to edit code (a macro-expansion bomb, a build-script infinite loop). Not a blanket "don't edit code."
+
 ---
 
-## 6. The Doctrine (Holzman + functional-rust)
+## 6. The Doctrine (Holzman + functional-rust — tool-correctness fixed)
 
 ### 6.1 Panic-free standard
 
-`unsafe_code` = forbid. `unwrap`/`expect`/`panic`/`todo`/`unimplemented`/`unreachable!`/`dbg!` denied. Production `assert!`/`assert_eq!`/`assert_ne!` (the rg scan). Build scripts get their own lane (they EXECUTE during builds).
+`unsafe_code = forbid`. `unwrap`/`expect`/`panic`/`todo`/`unimplemented`/`unreachable!`/`dbg!` denied. Production `assert!`/`assert_eq!`/`assert_ne!` scanned (parser-backed for Rust source, rg as coarse prefilter only).
 
-Honest caveats: `panic_in_result_fn` cannot prove a function doesn't panic (called functions may). `unused_must_use` only catches `#[must_use]` types (add `unused_results` as warn). Indexing ban catches `items[i]` but not all panic paths.
+Honest residuals: division by zero, char/string boundary ops, third-party panics, `Drop` panics, dependency-internal panics, macro-expanded panics (semgrep blind). Clippy helps; it does not prove panic freedom.
 
-### 6.2 Strict clippy (STUPIDLY strict — all groups maxed)
+### 6.2 Strict clippy (source-only, correct config placement)
 
-Start with ALL groups denied. Tests exempt from style (compile + behavior only).
+**Critical: clippy runs source-only `--lib --bins`, NOT `--all-targets`.** `--all-targets` includes tests/benches/examples → would nuke normal test code using `unwrap`/`assert!`/loops. Tests compile via `cargo test` and are behavior-gated, NOT style-gated.
+
+**Lint levels in `Cargo.toml [workspace.lints.*]`; thresholds in `clippy.toml`:**
 
 ```toml
+# Cargo.toml — lint LEVELS
+[workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
-restriction = { level = "warn", priority = -1 }
-```
-
-Critical lints use `-F` (forbid) on the command line, NOT workspace `-D` — `#[allow]` cannot lower a forbid:
-```
--F clippy::unwrap_used -F clippy::expect_used -F clippy::panic
--F clippy::indexing_slicing -F clippy::string_slice -F clippy::get_unwrap
--F clippy::arithmetic_side_effects
-```
-
-Functional-rust style denies (STYLE, not panic-safety — `unwrap_or` does NOT panic):
-```toml
-unwrap_or_default = "deny"
-unwrap_or_else = "deny"
-unwrap_or = "deny"
-too_many_lines = "deny"         # threshold 40
-too_many_arguments = "deny"     # threshold 5
+# restriction group: deny specific lints, not blanket-warn the whole group
+unwrap_or_default = "deny"       # real lint
 exit = "deny"
+too_many_lines = "deny"          # threshold in clippy.toml
+too_many_arguments = "deny"      # threshold in clippy.toml
 default_numeric_fallback = "deny"
 missing_errors_doc = "deny"
-fn_params_excessive_bools = "warn"  # CORRECTED: not fn_args_justly (doesn't exist)
-wildcard_enum_match_arm = "warn"    # house style; #[non_exhaustive] needs exceptions
+fn_params_excessive_bools = "deny"  # threshold in clippy.toml
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+unused_results = "warn"
+non_exhaustive_omitted_patterns = "deny"   # CORRECT name
+rust_2018_idioms = { level = "deny", priority = -1 }
 ```
 
-NOTE: `non_exhaustive_omitted_patterns` is the correct lint name. `#[non_exhaustive]` external enums FORCE wildcard arms — the no-wildcard rule needs explicit exceptions.
+```toml
+# clippy.toml — THRESHOLDS only
+too-many-lines-threshold = 40
+too-many-arguments-threshold = 5
+max-fn-params-bools = 1
+```
 
-`#[allow]`/`#[expect]` scan: Xtask scans gated source for suppression attributes. ANY un-approved suppression = `BYPASS_ALLOW_ATTRIBUTE` finding → CodeReject.
+**Critical lints passed as `-F` on the command line (forbid — `#[allow]` cannot lower):**
+```
+cargo clippy --workspace --lib --bins --frozen -- \
+  -F clippy::unwrap_used -F clippy::expect_used -F clippy::panic \
+  -F clippy::panic_in_result_fn -F clippy::todo -F clippy::unimplemented \
+  -F clippy::indexing_slicing -F clippy::string_slice -F clippy::get_unwrap \
+  -F clippy::arithmetic_side_effects -F clippy::dbg_macro \
+  -D warnings
+```
 
-`--cap-lints allow` for dependencies: Cargo caps lints for deps. The regime applies to FIRST-PARTY source only.
+**`unwrap_or`/`unwrap_or_else` are NOT valid clippy lint IDs.** A blanket ban on `.unwrap_or*` requires a semgrep rule, not a fake clippy lint. `unwrap_or_default` IS a real lint. Corrected.
 
-Xtask generates CUSTOM repair hints, not raw clippy suggestions (clippy's own suggestions can conflict with policy).
+**`restriction` group is NOT blanket-warned.** Specific restriction lints are individually denied. No decorative "warn" that has no semantics in the report model (findings reject or are informational — no middle ground).
+
+**`#[allow]`/`#[expect]` scan:** parser-backed scan for `#[allow(...)]`, `#[expect(...)]`, `#![allow(...)]`, `#![expect(...)]`, `cfg_attr(..., allow(...))`, `#[allow_internal_unstable]`, `#[allow_internal_unsafe]`, AND Cargo `[lints]` sections that lower required lints. Any un-approved suppression = `BYPASS_*` finding.
+
+**`--cap-lints allow` for deps:** Cargo caps lints for dependencies. Regime is first-party source only. Stated explicitly.
 
 ### 6.3 Functional-rust doctrine (honest about decidability)
 
-| Rule | Enforcement | Honest caveat |
-|---|---|---|
-| No imperative loops | semgrep | House style, not inherently more verifiable. |
-| ≤2 nesting depth | semgrep | House style. |
-| No `unwrap_or*` | clippy deny | STYLE — `unwrap_or` does NOT panic. |
-| No `Result<T, String>` | semgrep | Pattern check, not proof of error quality. |
-| No wildcard arms | semgrep (warn) | `#[non_exhaustive]` forces wildcards — needs exceptions. |
-| No bool flags | `fn_params_excessive_bools` (warn) | Checks declarations, not every bool. |
-| Parse don't validate | NOT a hard gate | Architectural guidance. |
-| Zero-copy | NOT enforced | Clippy catches "some" cases. |
-| No hidden I/O | NOT decidable by semgrep | Call behind trait/dep/callback can do I/O. |
-| No recursion | semgrep (syntactic only) | Catches direct recursion only. |
+Same as v4 §6.3 — house style rules enforced by semgrep, with honest caveats about undecidability (no hidden I/O, no recursion, parse-don't-validate, zero-copy are NOT hard gates). No wildcard arms has exceptions for `#[non_exhaustive]` external enums.
 
-### 6.4 Supply-chain (honest about tool limits)
+### 6.4 Supply-chain (honest, operationally separated)
 
-| Tool | Does | Does NOT |
-|---|---|---|
-| `cargo audit` | Checks Cargo.lock vs KNOWN RustSec advisories | Unknown vulnerabilities. |
-| `cargo deny` | Advisories + licenses + bans + sources + dupes | Overlaps audit on advisories (intentional). |
-| `cargo vet` | Third-party deps have trusted-entity audits; reports gaps | NOT a correctness proof. Bootstrap cost real. |
-| `cargo geiger` | Counts `unsafe` in dep tree | Does not prove soundness. |
-| `cargo machete` | Detects unused deps | EXPLICITLY IMPRECISE — baseline/triage, not blanket reject. |
-| `cargo hack --feature-powerset` | Every feature combo compiles | Does NOT prove target-specific code compiles. |
-
-Supply-chain checks distinguish runtime, build, dev, and proc-macro dependencies.
+Same tool table as v4. Additions:
+- **Conflict resolution:** any advisory from either cargo-audit OR cargo-deny rejects. Duplicates normalized by advisory ID.
+- **cargo-machete baseline:** ignore/baseline config is a policy file with owner/reason/expiry per entry.
+- **cargo-geiger thresholds by dependency class:** runtime/build/proc-macro = 0 unsafe fns; dev = policy-defined. Proc-macro deps execute during compilation — stricter.
+- **cargo-vet modes:** `audit = "enforce" | "report" | "bootstrap"`. Deploy requires `enforce`. Onboarding uses `bootstrap`.
 
 ### 6.5 Unsafe policy
 
-v1 is **zero first-party `unsafe`** (`unsafe_code = forbid`). No SIMD waiver, no FFI exception, no raw-pointer accounting. If a genuine need arises, it requires a policy-PR.
+v1: zero first-party `unsafe` (`forbid`). Dependency unsafe measured (geiger), not forbidden by rustc. No SIMD/FFI waiver in v1.
 
-### 6.6 Pinned toolchain
+### 6.6 Pinned toolchain + hermeticity
 
-`rust-toolchain.toml` with a **version-pinned** channel (`1.x.y` explicit, or date-pinned `nightly-YYYY-MM-DD`). "Stable" floats — use explicit version. Components: `rustfmt`, `clippy`, `rust-src`, `llvm-tools-preview`. `RUSTC_BOOTSTRAP` = violation. `portable_simd`/`try_blocks` are nightly-only — unavailable on stable pin. `RUSTFLAGS`/`RUSTC_WRAPPER`/`RUSTC_WORKSPACE_WRAPPER` scanned and constrained (§13).
+- `rust-toolchain.toml` with version-pinned channel (`1.x.y` explicit or `nightly-YYYY-MM-DD`).
+- **Do NOT invoke rustup shims.** Resolve absolute `cargo`/`rustc` binaries from the trusted toolchain image. Call those directly. This defeats `RUSTUP_TOOLCHAIN` and rustup directory overrides.
+- **`CARGO_HOME`** set to a controlled, read-only, digest-bound directory. **`RUSTUP_HOME`** same.
+- **Reject parent-directory cargo configs:** Cargo searches parent dirs and `$CARGO_HOME/config.toml`. Xtask runs from canonical workspace root, sets `CARGO_HOME`, and rejects configs outside the workspace.
+- `.cargo/config` (extensionless, legacy) AND `.cargo/config.toml` both checked.
+- `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` scanned, frozen, rejected unless policy-approved.
+- `RUSTC_BOOTSTRUP` = violation.
 
-### 6.7 Allowed library & crate policy
+### 6.7 Allowed library policy (profile-scoped, not universal)
 
-Curated allowlist via `cargo deny` + clippy `disallowed_methods`/`disallowed_types` + semgrep. Adding a non-approved crate requires a policy-PR.
-
-| Purpose | Approved | Banned |
-|---|---|---|
-| Async I/O | `tokio` | — |
-| HTTP | `axum`, `tower`, `tower-http`, `hyper` | — |
-| CPU parallelism | `rayon` (scaling evidence) | — |
-| Concurrency | `crossbeam-channel`, `parking_lot`, `flume` (bounded) | `std::sync::Mutex` in async scope |
-| Buffers | `bytes`, `arrayvec`, `smallvec`, `heapless` | — |
-| Maps | `hashbrown`, `ahash`, `rustc-hash` (internal keys) | fast non-crypto hasher for adversarial keys |
-| Formats | `postcard`, `serde_json` | new `bincode` |
-| Errors | `thiserror` (core), `anyhow` (shell) | `Result<T, String>` in core |
-| Parsing | `winnow`, `nom`, `lexical-core` | — |
-| Hashing | `blake3`, `crc32fast` | `chrono::Local`, raw `rand::random()` |
-| Database (ledger) | `rusqlite` (bundled) | — |
+The approved/banned crate table is a **named policy profile** (`server-strict`), NOT baked into the core product. Core Xtask supports crate allowlists; the default profile is small. `std::sync::Mutex` is enforced contextually (clippy `await_holding_lock`), not as a blanket crate ban. `chrono::Local` is a determinism-API rule, not a hashing rule.
 
 ### 6.8 Test & Mutation Evidence
 
-Xtask does not perform formal verification in v1. It does not claim to prove algorithmic correctness, memory-model correctness, concurrency correctness, or semantic equivalence.
-
-Instead, Xtask enforces deterministic test and mutation evidence:
-
-- `cargo test --workspace --locked` must pass.
-- Tests must run with fixed seeds where randomness is used.
-- Property tests may be used by the codebase, but Xtask treats them as ordinary deterministic tests unless policy declares specific seed/corpus inputs.
-- `cargo mutants` runs in the full scope and rejects surviving non-baselined mutants.
-- Equivalent or intentionally surviving mutants must be recorded in a checked-in mutation baseline with owner, reason, and expiry.
-- The mutation baseline digest is bound into the certificate.
-
-A passing test/mutation lane means the code satisfied the recorded test evidence for the recorded policy, seeds, dependencies, and toolchain. It is not a proof that the implementation is correct.
+Same as v4 §6.8. Additions:
+- `cargo test --workspace --frozen -- --test-threads=1` for deterministic harness config.
+- **TEST_NONDETERMINISTIC** emitted only for explicit known cases (Option C from review): random seed missing, proptest seed missing, test thread count > 1, wall-clock access scan. Xtask cannot prove determinism from one run.
+- "Tests must run with fixed seeds" is **guidance**, not enforced (Xtask doesn't know about proptest/quickcheck internals unless policy declares).
+- **Doctests** run by `cargo test` by default — state whether allowed/disabled/sandboxed (v1: allowed, same sandbox as tests).
+- cargo-mutants config (`.cargo/mutants.toml`) included in policy digest.
 
 ---
 
-## 7. The Enforcement Lanes
+## 7. Trusted-Runner Bootstrap (anti-self-gating — CRITICAL)
 
-| Layer | Tool(s) | Scope | Rejects |
-|---|---|---|---|
-| 0 | `cargo fmt --check` | edit/prepush/full | formatting drift |
-| 1 | `cargo check --workspace --locked` + rustc lints (`-D warnings`, `-F unsafe_code`, deny `unused_must_use`/`unused_results`/exhaustiveness) | edit/prepush/full | compile errors, denied lints |
-| 2 | `cargo clippy --workspace --all-targets --locked` with policy profile (source-only style gating; critical lints via `-F`) | edit/prepush/full | denied lints |
-| 3 | semgrep / structural source rules (no-loops, nesting, `unwrap_or*`, wildcard arms, `Result<_, String>`, hidden I/O patterns, `#[allow]` scan) | edit/prepush/full | functional-rust structural violations, bypass attributes |
-| 4 | production panic/assert scan (`rg` for `assert!`/`assert_eq!`/`assert_ne!`/`unreachable!` outside tests/benches/examples) + build.rs own scan | edit/prepush/full | production panic/assert macros; build-script violations |
-| 5 | `cargo test --workspace --locked` | prepush/full | failing tests |
-| 6 | supply chain: `cargo audit` + `cargo deny` + `cargo vet` + `cargo geiger` + `cargo machete` (with triage baseline) | prepush/full | advisories, banned crates, license violations, vet gaps, unsafe-dep threshold, unused deps |
-| 7 | `cargo hack check --workspace --feature-powerset --locked` | prepush/full | broken feature combination |
-| 8 | `cargo mutants` (with baseline + equivalent-mutant triage) | full | surviving non-baselined mutants |
+**A PR that modifies Xtask's own source CANNOT be gated by Xtask built from that PR.**
 
-**Skip rules:** layers that depend on compilation (2, 5, 7, 8) skip if Layer 1 fails. Layers 0, 1, 3, 4 run regardless (3/4 don't need compilation). Feature-powerset (7) depends on compilation — skip if L1 fails.
+```text
+PRs are gated by a trusted Xtask runner image built from the protected main
+branch, not by Xtask code from the PR itself.
 
-**Build scripts get their own scan (within Layer 4):** build.rs files EXECUTE during builds and are attacker-controllable. They are NOT excluded from scanning.
+Changes to Xtask's own source are checked by Xtask N-1 (the trusted runner).
+The newly built Xtask binary is promoted to trusted-runner status only after:
+  1. protected-branch merge
+  2. CODEOWNER review
+  3. successful self-check under the previous trusted runner
+
+The trusted Xtask runner image digest is bound into Evidence.
+```
+
+**Gate-control surface** (all require CODEOWNER + previous-policy evaluation, not just `clippy.toml`):
+```
+.xtask/**  .moon/**  .github/workflows/**  Cargo.toml [workspace.lints]
+rust-toolchain*  .cargo/**  xtask crates  signing config  sandbox config
+```
 
 ---
 
-## 8. Certificate Model (artifact-bound, fresh, split deterministic/signed)
+## 8. The Enforcement Lanes
 
-### 8.1 Evidence (deterministic — identical input produces identical digest)
+| Layer | Tool(s) | Scope | Depends on compile? | Rejects |
+|---|---|---|---|---|
+| 0 | `cargo fmt --check` | edit | No | formatting drift |
+| 1 | `cargo check --workspace --frozen` + rustc lints | edit | — | compile errors, denied lints |
+| 2 | `cargo clippy --workspace --lib --bins --frozen` with `-F` critical lints (source-only; NOT `--all-targets`) | edit | Yes | denied lints |
+| 3 | semgrep / structural source rules + `#[allow]` scan | edit | **No** | structural violations, bypass attributes |
+| 4 | production panic/assert scan (parser-backed) + build-script scan (manifest-declared, not just `build.rs`) | edit | No | production panic macros; build-script violations |
+| 5 | `cargo test --workspace --frozen -- --test-threads=1` | prepush | Yes | failing tests |
+| 6 | supply chain: `cargo audit` + `cargo deny` + `cargo vet` + `cargo geiger` + `cargo machete` | prepush | No | advisories, bans, licenses, vet gaps, unsafe-dep, unused deps |
+| 7 | `cargo hack check --workspace --feature-powerset --frozen` (bounded-depth per policy) | prepush | Yes | broken feature combination |
+| 8 | **artifact build**: `cargo build --workspace --release --frozen --target <t> --features <f>` (policy-declared from closed schema) | full | Yes | build failure; produces artifact_digest |
+| 9 | `cargo mutants` (with `.cargo/mutants.toml` baseline) | full | Yes | surviving non-baselined mutants |
+
+**`--frozen` everywhere, not `--locked`.** `--locked` only asserts lockfile consistency; `--frozen` = `--locked` + `--offline` (no network).
+
+**Skip rules:** compilation-dependent lanes (2, 5, 7, 8, 9) skip if Layer 1 fails. Lanes 0, 1, 3, 4 always run. Layer 3 (semgrep) runs on source regardless of compilation.
+
+**Feature matrix policy:** full powerset can explode. Policy declares `mode = "powerset" | "bounded-depth" | "declared"` with depth/grouping/exclusions. Certificate records the mode. No silent "some feature combos."
+
+**cargo-hack modes that modify manifests (`--no-dev-deps`, `--no-private`):** banned — conflict with readonly source and deterministic source digest.
+
+**Generated OUT_DIR code:** `include!(concat!(env!("OUT_DIR"), ...))` is BANNED in v1. If build-time generation is needed (tonic/prost/bindgen/lalrpop/sqlx), it requires a policy-PR adding a generated-code manifest. v1 = ban + revisit.
+
+---
+
+## 9. Two-Environment Architecture + Evidence Isolation
+
+### 9.1 Trusted runner + untrusted execution + isolated evidence
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ UNTRUSTED EXECUTION JOB                                         │
+│ (inside trusted Xtask runner image built from protected main)   │
+│                                                                 │
+│ Mounts:                                                         │
+│   /work/source/     — READ-ONLY (gated repo)                   │
+│   /work/target-cargo/ — WRITABLE (cargo children only)          │
+│   /work/out/         — WRITABLE (OUT_DIR)                      │
+│   /work/tmp/         — WRITABLE (temp)                         │
+│   /evidence/         — WRITABLE BY XTASK ONLY, not mounted     │
+│                        into cargo child processes              │
+│                                                                 │
+│ Xtask runs lanes. Cargo children CANNOT write /evidence/.       │
+│ Xtask copies trusted lane outputs to /evidence/ after children  │
+│ complete.                                                       │
+│                                                                 │
+│ NO SIGNING KEY. NO HOST SOCKETS. NO DOCKER SOCKET.              │
+│ NO SSH/GPG AGENTS. NO CLOUD METADATA. NO HOST HOME.             │
+│ Fresh CARGO_HOME/RUSTUP_HOME. Fresh target dir.                 │
+│                                                                 │
+│ OUTPUTS: /evidence/ bundle + evidence digest                    │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ evidence bundle + CI provenance token
+                           │ (NOT a live checkout)
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SIGNING JOB (hardened, no code execution)                       │
+│                                                                 │
+│ Verifies (not just receives digests):                           │
+│   1. CI workflow identity matches expected                      │
+│   2. Trusted Xtask runner image digest matches policy           │
+│   3. Repository/ref/branch policy matches                       │
+│   4. Execution job completed successfully (CI status)           │
+│   5. Evidence schema validates                                  │
+│   6. Evidence internal digests self-consistent                  │
+│   7. Artifact digest matches the artifact promoted to deploy    │
+│   8. Source digest, policy epoch, advisory epoch consistent     │
+│                                                                 │
+│ HAS THE SIGNING KEY (KMS/HSM or keyless CI identity)            │
+│                                                                 │
+│ OUTPUTS: signed Attestation + ledger entry                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+The signer does NOT run repository code. It verifies provenance, then signs. "Digest came over the wall" is not enough.
+
+### 9.2 Sandbox additions (beyond v4)
+
+No host sockets, no Docker/container runtime socket, no SSH/GPG agents, no cloud metadata (169.254.169.254), no `/proc` scraping, no shared sccache unless content-addressed and untrusted-safe, no host `HOME`. Build scripts that compile C code: `cc`/`clang`/`ar`/`ld`/`pkg-config` digests included in build-env evidence (or ban native links in v1).
+
+### 9.3 Shared cache poisoning
+
+sccache and Moon remote cache: if cache accepts writes from untrusted jobs, a malicious run can poison outputs. Either ban shared compiler caches for gate runs, or bind cache provenance into evidence (content-addressed, verified on hit).
+
+---
+
+## 10. Certificate Model
+
+### 10.1 Evidence (deterministic)
 
 ```rust
 pub struct Evidence {
     pub schema_version: u16,
-    pub source_digest: Digest,
+    pub source_manifest_digest: Digest,      // canonical source manifest (§10.5)
     pub cargo_lock_digest: Digest,
-    pub artifact_digest: Option<Digest>,      // Required for deploy certs
+    pub dependency_source_digest: Digest,     // vendored dep tree
+    pub artifact_digest: Option<Digest>,      // required for deploy certs (Layer 8)
+    pub artifact_kind: Option<ArtifactKind>,  // Binary | Cdylib | Container | Wasm
+    pub build_profile: Option<String>,
+    pub target_triples: Option<Box<[String]>>,
+    pub feature_set: Option<Box<[String]>>,
+    pub build_command_argv_digest: Option<Digest>,
     pub policy_digest: Digest,
-    pub toolchain_digest: Digest,             // hash of RESOLVED BINARIES or hermetic OCI digest
-    pub dependency_source_digest: Digest,     // vendored dep tree digest
-    pub advisory_db_digest: Digest,           // pinned RustSec/deny DB snapshot
-    pub feature_profile_digest: Digest,
+    pub toolchain_image_digest: Digest,       // OCI/Nix image digest, not version strings
+    pub xtask_runner_image_digest: Digest,    // trusted runner that ran the gate
+    pub advisory_db_digest: Digest,
+    pub advisory_epoch: u64,                  // increments on advisory snapshot update
+    pub cargo_vet_db_digest: Digest,
+    pub feature_matrix_digest: Digest,        // records mode (powerset/bounded/declared)
     pub mutation_baseline_digest: Option<Digest>,
-    pub per_layer: Box<[LayerDigest]>,
-    pub scope: GateScope,                     // Edit | Prepush | Full
+    pub per_lane: Box<[DeterministicLaneEvidence]>,
+    pub scope: GateScope,
+    pub env_digest: Digest,
+    pub native_toolchain_digest: Option<Digest>, // cc/ld/pkg-config if build scripts link native
 }
 ```
 
-### 8.2 Attestation (non-deterministic, SIGNED — detached over canonical pre-sign payload)
+### 10.2 Attestation (signed, non-deterministic)
 
 ```rust
 pub struct Attestation {
-    pub evidence_digest: Digest,              // blake3 of canonical-serialized Evidence
+    pub evidence_digest: Digest,        // blake3 of canonical-serialized Evidence
     pub issued_at_utc: DateTime<Utc>,
-    pub expires_at_utc: DateTime<Utc>,
+    pub expires_at_utc: DateTime<Utc>,   // max TTL enforced by policy (e.g. 24h)
     pub signing_key_id: String,
-    pub signature: Ed25519Signature,          // detached, over evidence_digest + fields above
+    pub ci_workflow_identity: String,    // provenance: which CI workflow produced this
+    pub runner_image_digest: Digest,     // provenance: trusted runner image
+    pub signature: Vec<u8>,              // Ed25519 over domain-separated pre-sign payload
 }
 ```
 
-The signature is DETACHED over a canonical pre-sign payload. It does not sign itself.
+**Domain separation:** signature is over `b"XTASK_ATTESTATION_V1" || canonical_pre_sign_payload`. Prevents cross-protocol signature reuse.
 
-### 8.3 Scope conflation fix
+**Max TTL:** policy declares `max_attestation_ttl` (e.g. 24h). Deploy-gate rejects attestations whose `expires_at - issued_at` exceeds policy.
 
-An attestation's Evidence encodes `scope`. Deploy-gate REQUIRES `scope = Full`. A `scope = Edit` attestation (from the fast loop) is NOT deploy-acceptable regardless of signature.
+### 10.3 Certificate (bundle)
 
-### 8.4 Canonical serialization
+Certificate = Evidence + Attestation, serialized together. This is the user-facing/deploy-facing artifact.
 
-Canonical JSON (sorted keys, no whitespace), sorted findings (by lane, rule_id, location), normalized paths (workspace-relative, forward-slash), scrubbed volatile fields (durations stripped from evidence digests), fixed locale (C/POSIX), fixed timezone (UTC).
+### 10.4 Canonical serialization
 
-### 8.5 Audit Ledger (SQLite, append-only, hash-chained — non-repudiation)
+Binary canonical format (Borsh or postcard) for Evidence digests — JSON canonicalization is a swamp (number formatting, Unicode normalization, duplicate keys). JSON is produced only as a human/AI report, NOT for digest computation. Digests: `{ algorithm: Blake3, hex: lowercase-64-chars }`.
 
-Ed25519 does the signing. SQLite does the **history**. The AI cannot forge a signature, but without a persistent record it can run the gate 46 times, get CodeReject every time, and tell you "it passed." Individual JSON files can be deleted or swapped. The ledger fixes this: every gate run, certificate, and policy change is recorded in a tamper-evident, hash-chained, queryable database.
+### 10.5 Source manifest (canonical file set)
 
-**Schema:**
-
-```sql
-CREATE TABLE ledger (
-    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_hash  TEXT NOT NULL,    -- blake3(canonical(entry_data) || prev_hash)
-    prev_hash   TEXT NOT NULL,    -- hash-chain: links to previous entry
-    entry_type  TEXT NOT NULL,    -- 'gate_run' | 'attestation' | 'policy_change' | 'mutation_baseline' | 'revocation'
-    issued_utc  TEXT NOT NULL,
-    entry_data  TEXT NOT NULL,    -- canonical JSON payload
-    signature   TEXT              -- Ed25519 signature (for attestation entries only)
-);
-
-CREATE INDEX idx_type ON ledger(entry_type);
-CREATE INDEX idx_source ON ledger(entry_data);  -- for source_digest queries
+```rust
+pub struct SourceManifestEntry {
+    pub path: WorkspacePath,
+    pub kind: FileKind,         // File | Symlink | Directory
+    pub digest: Digest,
+    pub executable_bit: bool,
+}
 ```
 
-**Hash-chain integrity:** each `entry_hash = blake3(canonical(entry_data) || prev_hash)`. Tampering with ANY past entry breaks ALL subsequent `prev_hash` links. The chain is verifiable from genesis to the latest entry in a single pass. A broken chain = tampering detected.
-
-**What each entry type records:**
-
-| Entry type | Payload | Who writes |
-|---|---|---|
-| `gate_run` | scope, verdict type (Pass/CodeReject/GateReject/...), finding count, evidence digest, per-lane outcome digests | verifier (local, AI-accessible) |
-| `attestation` | full Attestation struct + Evidence digest | **signer only** (CI, trusted) |
-| `policy_change` | old policy_digest, new policy_digest, diff classification, CODEOWNER approver | signer |
-| `mutation_baseline` | surviving mutants, owners, reasons, expiry | signer (after policy-PR approval) |
-| `revocation` | revoked key_id, reason, revoked_at | signer |
-
-**Two ledgers, two trust levels:**
-- **Local ledger** (verifier environment): records every `gate_run`. The AI writes entries here. Useful for the repair loop ("what failed last time?") and local debugging. NOT trusted for non-repudiation (the AI controls this environment and could delete the file).
-- **CI ledger** (signer environment): the AUTHORITATIVE record. Records every `attestation`, `policy_change`, `mutation_baseline`, `revocation`. This is what auditors and the deploy-gate check. The AI has NO write access here.
-
-**How this prevents AI lying:**
-1. The AI runs locally, gets CodeReject 46 times — each appends to the local ledger. If you inspect the local ledger, you see the history. If the AI deleted it, the absence is itself suspicious.
-2. The AI CANNOT produce a CI-ledger entry without actually passing in CI and the signer issuing an attestation. The CI ledger's hash-chain + Ed25519 signatures make forged entries detectable.
-3. The deploy-gate checks: does the CI ledger contain a valid `attestation` entry whose evidence digest matches the current artifact? Is the chain intact from genesis to that entry? Is the signing key not revoked?
-4. You can query: `SELECT * FROM ledger WHERE entry_type = 'gate_run' ORDER BY seq DESC LIMIT 50` — see exactly what happened.
-
-**Tamper detection:**
-- `xtask ledger verify` — walks the chain from seq 1 to latest, recomputes every `entry_hash`, detects any break.
-- Broken chain = the ledger was tampered with after the fact.
-- Missing CI ledger = no deployable attestation history = deploy-gate rejects.
-
-**Storage:** `rusqlite` crate (safe wrapper, no unsafe in user code, `bundled` feature compiles SQLite from source — no system dependency). WAL mode for crash safety. The CI ledger file is a trust artifact protected alongside the signing key.
-
-**What the ledger does NOT do:** it does NOT replace Ed25519 signing. It does NOT hold the signing key (the key lives in KMS/HSM). It does NOT execute code. It is a tamper-evident record, not a trust oracle.
+Includes: all `.rs` files, `Cargo.toml`/`Cargo.lock`, `build.rs` (manifest-declared), `rust-toolchain.toml`, policy files, `.cargo/config*`, semgrep rules, `include_str!`/`include_bytes!` targets, `#[path]` includes. Source escapes (files outside workspace, symlink targets outside workspace) = errors. `include!(concat!(env!("OUT_DIR"), ...))` banned in v1.
 
 ---
 
-## 9. Two-Environment Architecture (signing-key isolation — CRITICAL)
+## 11. Key Revocation + Freshness
 
-**THE SIGNING KEY MUST NEVER EXIST IN ANY ENVIRONMENT THAT EXECUTES A CARGO COMMAND ON UNTRUSTED CODE.**
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ UNTRUSTED EXECUTION JOB (verifier sandbox)                   │
-│                                                              │
-│  Sandbox: network-off, readonly source, frozen PATH,        │
-│  no secrets, CPU/mem limits, fixed env/locale/timezone       │
-│                                                              │
-│  Runs: cargo check/clippy/test/mutants/hack, semgrep,        │
-│        rg, build scripts, proc macros, tests                 │
-│                                                              │
-│  HAS NO SIGNING KEY                                          │
-│                                                              │
-│  OUTPUTS: evidence bundle + evidence digest                  │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ canonical evidence only (no live checkout)
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│ SIGNING JOB (hardened, no code execution)                    │
-│                                                              │
-│  Receives ONLY: evidence digest, source digest, artifact     │
-│  digest, policy digest, advisory-db digest                   │
-│                                                              │
-│  HAS THE SIGNING KEY (KMS/HSM or keyless CI identity)        │
-│                                                              │
-│  OUTPUTS: signed Attestation                                 │
-└─────────────────────────────────────────────────────────────┘
+```rust
+// In policy:
+pub keyring_digest: Digest,            // trusted public keys
+pub revocation_list_digest: Digest,    // revoked key_ids
 ```
 
-The signer NEVER receives a live checkout. It receives digests and canonical evidence. It cannot execute code. An attacker who compromises the execution job cannot sign — the key isn't there.
+Deploy-gate checks: signing key not in revocation list. Keyring matches policy. If live fetch is needed for revocation, it is a freshness check OUTSIDE evidence (explicitly nondeterministic), not part of the deterministic evidence chain.
 
----
-
-## 10. Sandbox Profile
-
-| Control | Value | Why |
-|---|---|---|
-| Network | OFF | Determinism; no dependency fetching, no live advisory DB |
-| Source tree | READ-ONLY | Build scripts cannot mutate source; compare source digest before/after |
-| Writable | `target/`, `OUT_DIR`, temp only | Build artifacts only |
-| Secrets | ABSENT | No signing key, no tokens |
-| PATH | FROZEN — resolved absolute tool paths from trusted toolchain dir | No PATH poisoning |
-| Env vars | Fixed, frozen, digest-bound | `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_NET_OFFLINE=true`, `--locked`, `--frozen` |
-| Locale | Fixed (C/POSIX) | Deterministic output |
-| Timezone | Fixed (UTC) | Deterministic timestamps |
-| CPU/Memory | Cgroup-capped | mutants can run away |
-| `.cargo/config.toml` | In policy digest, constrained | Build flags/wrappers are a policy surface |
-
-Network-off means: dependencies vendored or `--frozen`/`--locked`. Advisory DBs are pinned snapshots (digests in certificate), not live-fetched.
-
----
-
-## 11. Policy Files (what's in policy_digest)
-
-```
-clippy.toml
-rustfmt.toml
-.xtask/semgrep/           (all rules)
-deny.toml
-rust-toolchain.toml
-cargo-vet supply-chain/   (vet policy + imports)
-.xtask/policy.toml        (hot-module sets [future], scope config, mutation baseline ref)
-.cargo/config.toml        (constrained)
-Cargo.toml [lints]        (workspace lint config)
-.xtask/mutants-baseline.json  (surviving-mutant triage)
-```
+**Advisory epoch:** deploy certificates are per-advisory-epoch. Any advisory snapshot update invalidates prior deploy attestations until re-gated. State this explicitly: redeploying yesterday's binary after today's RustSec update fails until re-gate.
 
 ---
 
 ## 12. Bypass-Surface Countermeasures
 
-| Bypass vector | Countermeasure |
-|---|---|
-| `#[allow(...)]` / `#[expect(...)]` | rg/semgrep scan; un-approved = CodeReject. Critical lints use `-F` (can't be lowered). |
-| `cfg_attr(..., allow(...))` | same scan |
-| `.cargo/config.toml` | in policy_digest; constrained; scanned for wrapper overrides |
-| `RUSTFLAGS` / `CARGO_ENCODED_RUSTFLAGS` | scanned; unexpected rejected; frozen in env_digest |
-| `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` | scanned; rejected unless policy-approved |
-| PATH poisoning | frozen absolute tool paths |
-| build scripts | own scan (Layer 4); readonly source; digest compared before/after |
-| proc macros | execute at compile time; mitigated by signing-key isolation (§9) + supply-chain scan |
-| `include!` / `#[path]` | canonical discovery; symlink handling; source-escape ban |
-| generated OUT_DIR code | scanned and ledgered |
-| `cfg`-gated code | semgrep parses all branches conservatively; target ≠ feature powerset |
-| `#[cfg(test)]` in src/*.rs | cfg-aware scanning (not falsely production) |
-| semgrep ignore comments | scanned; un-approved = CodeReject |
-| cargo-audit `--ignore` / deny exceptions / vet exemptions / mutants excludes | scanned in config; un-approved = CodeReject |
-| dependency tricks | cargo-deny bans + dependency_source_digest |
-| macro-expanded code | KNOWN LIMITATION: semgrep/rg blind to proc-macro output. Clippy partially covers (sees post-expansion). Stated honestly. |
+Same as v4 §12, plus:
+- `#![allow(...)]`, `#![expect(...)]`, `#[allow_internal_unstable]`, `#[allow_internal_unsafe]` scanned.
+- Cargo `[lints]` sections that lower required lints scanned and rejected.
+- First-party `--cap-lints` injection via `RUSTFLAGS`/`.cargo/config`/wrapper scanned.
+- Manifest-declared build scripts (not just `build.rs`) scanned.
+- Build-dep and proc-macro-dep build scripts considered executable supply-chain code (allowlisted, source-digested).
+- Parser-backed scan for Rust source (not just rg) for `#[allow]`/assert-macros. rg as coarse prefilter only.
+- `cfg`-aware scanning with defined cfg universe (test=false, target matrix, feature matrix).
 
 ---
 
 ## 13. Escape Hatch (anti-circular policy)
 
-**NO per-site bypass.** The only escape is editing policy files (§11). Anti-circularity: a policy-PR is checked against the **PREVIOUS main-branch policy** (not the weakened one). A meta-policy requires:
-- CODEOWNER approval on any policy file change.
-- Explicit diff classification (tightening / loosening / neutral). Loosening flagged for human review.
-- The policy-PR passes the gate under the PREVIOUS policy.
+NO per-site bypass. Policy-PR checked against PREVIOUS main-branch policy + CODEOWNER + diff classification. Gate-control surface expanded to include `.moon/**`, `.github/workflows/**`, CI config, xtask crates, signing config, sandbox config — not just lint files.
 
 ---
 
 ## 14. Deploy-Gate
 
-The deploy-gate checks ALL of:
-1. Attestation present, `scope = Full`.
-2. Signature valid under `signing_key_id` (key not revoked).
-3. Fresh: `issued_at ≤ now ≤ expires_at`.
-4. Evidence matches: recompute `Evidence` digest from actual artifact+source+policy+toolchain+advisory-db+env. Compare. Mismatch → REJECT.
-5. Advisory DB current: `advisory_db_digest` matches current pinned snapshot. Changed → REJECT.
-6. Artifact-bound: if deploying a binary, `artifact_digest` matches actual binary.
-7. If the deploy-gate itself cannot run → REJECT (fail-closed).
+Checks ALL of:
+1. Certificate present (Evidence + Attestation), `scope = Full`.
+2. Signature valid under `signing_key_id`, domain-separated, key not revoked.
+3. Fresh: `issued_at ≤ now ≤ expires_at`, TTL ≤ policy max.
+4. CI provenance: workflow identity + runner image digest match policy.
+5. Evidence matches: recompute from actual artifact+source+policy+toolchain+advisory-db+env. Mismatch → REJECT.
+6. Advisory epoch current: `advisory_db_digest` + `advisory_epoch` match current pinned snapshot.
+7. Artifact-bound: `artifact_digest` + `artifact_kind` + `target_triples` + `build_profile` + `feature_set` match the deployment request.
+8. If deploy-gate cannot run → REJECT (fail-closed).
 
-Deploy-gate is an EXPLICIT dependency of the deploy target — not skipped by Moon's affected-target logic.
+**Deploy request must include:** artifact, evidence.json, attestation.json, source manifest/commit digest, policy manifest digest, toolchain image digest. Do not imply deploy can recompute from things it doesn't possess.
+
+**Moon:** `runInCI: 'always'` (not `true`) for deploy-gate — never skipped by affected-target logic. Explicit `deps: ['sign-attestation']`.
 
 ---
 
-## 15. Moon CI/CD Integration
+## 15. Audit Ledger (SQLite, hash-chained)
+
+Same as v4 §8.5. Every gate_run, attestation, policy_change, revocation recorded. Local ledger (verifier) + CI ledger (signer, authoritative). `xtask ledger verify` walks the chain. `xtask ledger query` for audit history.
+
+---
+
+## 16. Moon CI/CD Integration
 
 ```yaml
 gate-edit:
-  command: 'xtask gate --scope edit --emit json --out target/xtask/report.json'
-  toolchains: [rust]
+  command: 'xtask gate --scope edit --emit json --out /evidence/report.json'
   options: { runInCI: true }
-  inputs:
-    - '@globs(sources)'
-    - '.xtask/**'
-    - 'Cargo.toml'
-    - 'Cargo.lock'
-    - '**/Cargo.toml'
-    - '.cargo/**'
-    - 'rustfmt.toml'
-    - 'clippy.toml'
-    - 'deny.toml'
-    - 'supply-chain/**'
-    - 'rust-toolchain.toml'
-  outputs: ['target/xtask/report.json', 'target/xtask/evidence.json']
+  inputs: ['@globs(sources)', '.xtask/**', 'Cargo.toml', 'Cargo.lock', '**/Cargo.toml',
+           '.cargo/**', 'rustfmt.toml', 'clippy.toml', 'deny.toml', 'supply-chain/**',
+           'rust-toolchain.toml']
 
 gate-full:
-  command: 'xtask gate --scope full --emit json --out target/xtask/report.json'
-  inputs:
-    - '@globs(sources)'
-    - '.xtask/**'
-    - 'Cargo.toml'
-    - 'Cargo.lock'
-    - '**/Cargo.toml'
-    - '.cargo/**'
-    - 'rustfmt.toml'
-    - 'clippy.toml'
-    - 'deny.toml'
-    - 'supply-chain/**'
-    - 'rust-toolchain.toml'
-    - '.xtask/mutants-baseline.json'
-    - '.xtask/advisory-db-snapshot/'
+  command: 'xtask gate --scope full --emit json --out /evidence/report.json'
+  inputs: ['@globs(sources)', '.xtask/**', 'Cargo.toml', 'Cargo.lock', '**/Cargo.toml',
+           '.cargo/**', 'rustfmt.toml', 'clippy.toml', 'deny.toml', 'supply-chain/**',
+           'rust-toolchain.toml', '.cargo/mutants.toml', '.xtask/mutants-baseline.json',
+           '.xtask/advisory-db-snapshot/', '.xtask/feature-matrix.toml',
+           '.xtask/target-matrix.toml']
+
+sign-attestation:
+  command: 'xtask sign-evidence /evidence/evidence.json --out /evidence/attestation.json'
+  deps: ['gate-full']
+  options: { runInCI: true }
+  # RUNS IN SIGNER ENVIRONMENT — no repository code execution
+  outputs: ['/evidence/attestation.json']
 
 deploy-gate:
-  command: 'xtask verify-attestation target/xtask/attestation.json --require-signature --require-scope full'
-  options: { runInCI: true }
+  command: 'xtask verify-attestation /evidence/attestation.json --require-signature --require-scope full'
+  deps: ['sign-attestation']
+  options: { runInCI: 'always' }   # NOT 'true' — never skipped by affected logic
 ```
 
 ---
 
-## 16. Error Taxonomy
+## 17. Error Taxonomy
 
-### Report root (disjoint)
-`Pass | CodeReject | GateReject | PolicyError | InputError`
+### Report root
+`Pass | Reject{code_findings, gate_failures, kind} | PolicyError | InputError`
 
-### Lane failures (GateReject)
-`ToolMissing | ToolCrashed | ToolTimeout | ToolVersionMismatch | ToolPathPoisoned | PanicInGate`
+### Lane failures
+`InfraFailure | ToolFailure | ResourceFailure | SuspiciousFailure`
 
 ### Rule families
-- `HOLZMAN_PANIC_*` — unwrap/expect/panic/todo/indexing/assert-macro
-- `HOLZMAN_UNSAFE_*` — unsafe/raw-pointer/transmute/as-conversion
-- `HOLZMAN_CHECKED_*` — ignored Result, arithmetic side effects
-- `FUNC_NESTING_*` — >2 nesting depth
-- `FUNC_LOOPS_*` — imperative for/while/loop
-- `FUNC_STYLE_*` — Result<_,String>, wildcard arm, bool flag, unwrap_or family
-- `SUPPLY_ADVISORY` — known advisory
-- `SUPPLY_LICENSE` — license violation
-- `SUPPLY_BANNED_CRATE` — banned crate
-- `SUPPLY_VET_GAP` — cargo-vet gap
-- `SUPPLY_UNUSED_DEP` — unused dependency
-- `SUPPLY_UNSAFE_DEP_THRESHOLD` — unsafe in dep tree above threshold
-- `FEATURE_COMBO_FAILED` — broken feature combination
-- `TEST_FAILURE` — failing test
-- `TEST_NONDETERMINISTIC` — test produces non-deterministic results
-- `MUTANT_SURVIVED` — surviving non-baselined mutant
-- `MUTANT_BASELINE_EXPIRED` — baselined mutant past expiry
-- `MUTANT_BASELINE_UNOWNED` — baselined mutant missing owner
-- `BYPASS_*` — allow-attribute / cfg-attr-allow / semgrep-ignore / cargo-ignore / tool-wrapper / source-escape
-- `POLICY_*` — malformed policy / circular-policy-change
-- `CERT_*` — cert-absent / unsigned / digest-mismatch / expired / scope-mismatch
-- `INPUT_*` — invalid input contract
-- `GATE_*` — tool-missing / crashed / timeout
+`HOLZMAN_PANIC_*`, `HOLZMAN_UNSAFE_*`, `HOLZMAN_CHECKED_*`, `FUNC_LOOPS_*`, `FUNC_NESTING_*`, `FUNC_STYLE_*`, `SUPPLY_ADVISORY`, `SUPPLY_LICENSE`, `SUPPLY_BANNED_CRATE`, `SUPPLY_VET_GAP`, `SUPPLY_UNUSED_DEP`, `SUPPLY_UNSAFE_DEP_THRESHOLD`, `FEATURE_COMBO_FAILED`, `TEST_FAILURE`, `MUTANT_SURVIVED`, `MUTANT_BASELINE_EXPIRED`, `MUTANT_BASELINE_UNOWNED`, `BYPASS_*`, `POLICY_*`, `CERT_*`, `INPUT_*`, `GATE_*`, `BUILD_*`
 
-### Severity
-No decorative severity. Findings either cause CodeReject or are informational. Removed from the model.
+No decorative severity. Findings reject or are informational.
 
 ---
 
-## 17. Toolchain Requirements
+## 18. Toolchain Requirements (scope-tiered)
 
-**Hard-required (all scopes):**
-`cargo`, `rustc`, `rustfmt`, `clippy`, `rg`, `semgrep`, `cargo-audit`, `cargo-deny`, `cargo-vet`, `cargo-geiger`, `cargo-machete`, `cargo-hack`
+| Scope | Hard-required |
+|---|---|
+| edit | `cargo`, `rustc`, `rustfmt`, `clippy`, `rg`, `semgrep` |
+| prepush | edit + `cargo-audit`, `cargo-deny`, `cargo-vet`, `cargo-geiger`, `cargo-machete`, `cargo-hack` |
+| full | prepush + `cargo-mutants` |
 
-**Hard-required for full scope only:**
-`cargo-mutants`
+Optional in tests (Xtask v1 doesn't know about them unless via `cargo test`): `proptest`, `quickcheck`, `insta`, `rstest`, `loom`, `miri`, `cargo-fuzz`.
 
-**Optional but allowed inside tests (Xtask v1 does not know about them unless invoked through `cargo test`):**
-`proptest`, `quickcheck`, `insta`, `rstest`, `loom`, `miri`, `cargo-fuzz`
-
-All versions pinned and bound into `toolchain_digest` (hash of resolved binaries or hermetic OCI digest, not version strings).
-
----
-
-## 18. Second-Order & Pre-Mortem
-
-**Key-leak mitigation:** "digest recompute" does NOT mitigate a leaked key. Real mitigation: key revocation, KMS/HSM or keyless CI identity (Sigstore), transparency logging (Rekor), branch-protected signing policy, separation from untrusted execution (§9).
-
-**3 AM disaster:** A logical correctness bug that passes all lints/tests/mutations but is semantically wrong. Xtask certifies conformance to a pinned quality policy — it does not prove the algorithm is correct. The certificate records which lanes ran.
-
-**Macro-expanded code blind spot:** semgrep/rg cannot see proc-macro output. Clippy partially covers (post-expansion). Known residual.
-
-**Build-script mutation:** readonly source (§10) + source-digest comparison before/after.
+All pinned. `toolchain_image_digest` = OCI/Nix image digest (not version strings). `doctor` reports available vs **trusted** (expected digest, actual digest, absolute path, source of installation).
 
 ---
 
-## 19. The Honest Trust Boundary
+## 19. Second-Order & Pre-Mortem
 
-Xtask certifies that code **conforms to a checked-in quality policy**. It is mechanically checked, policy-conformant, evidence-backed, fail-closed, artifact-bound, and deterministic for a pinned input set.
+**Key-leak mitigation:** revocation, KMS/HSM/keyless (Sigstore), transparency logging (Rekor), branch-protected signing, separation from untrusted execution.
 
-**Xtask does NOT guarantee:**
-- Behavioral correctness (the algorithm is right).
-- All UB freedom.
-- Macro-expanded code quality (semgrep blind; clippy partial).
-- Unknown vulnerabilities (cargo-audit checks KNOWN advisories).
-- Concurrency soundness.
-- That `unwrap_or` is a panic risk (it isn't — it's house style).
+**3 AM disaster:** logical correctness bug passing all lanes. Xtask certifies policy conformance, not correctness.
 
-The certificate is a **quality floor for a pinned policy**, not a correctness proof.
+**Macro-expanded code blind spot:** semgrep blind; clippy partial. Known residual.
+
+**Cache poisoning:** shared sccache/Moon cache can be poisoned. Ban or content-address.
 
 ---
 
-## 20. Component / Module Map
+## 20. Honest Trust Boundary
 
-Single Cargo workspace (decomposer refines):
-- `xtask-bin` — CLI (clap). Subcommands: `gate`, `verify-attestation`, `doctor`.
-- `xtask-core` — domain types: `Report`, `Finding`, `Lane`, `RuleId`, `RepairHint`, `Location`, `LaneOutcome`, `SkipReason`, `LaneFailure`, `LaneEvidence`.
-- `xtask-policy` — policy loading, validation, `policy_digest`, meta-policy (CODEOWNER, diff classification).
-- `xtask-lanes` — lane runners: `fmt`, `rustc`, `clippy`, `semgrep`, `assert_scan`, `build_rs_scan`, `test`, `supply`, `feature`, `mutants`.
-- `xtask-sandbox` — sandbox: network-off, readonly source, frozen PATH, fixed env, cgroup caps.
-- `xtask-evidence` — canonical serialization, `Evidence` computation, `LaneEvidence`.
-- `xtask-signer` — `Attestation` signing/verification, Ed25519, canonical pre-sign payload, key_id, revocation.
-- `xtask-ledger` — SQLite audit ledger: append-only hash-chained entries, chain verification, query API (`rusqlite` bundled).
-- `xtask-bypass` — bypass-surface scans: allow-attribute, cfg-attr, tool-wrapper, source-escape.
-- `xtask-output` — report JSON schema (versioned), `doctor` diagnostics.
+Xtask certifies conformance to a pinned quality policy. Mechanically checked, policy-conformant, evidence-backed, fail-closed, artifact-bound, deterministic for a pinned input set, with a chain of custody from trusted runner to signed attestation.
 
-All first-party crates pass their own gate (dogfooded).
+Does NOT guarantee: behavioral correctness, all UB freedom, macro-expanded code quality, unknown vulnerabilities, concurrency soundness, that `unwrap_or` is a panic risk (house style), dependency soundness (geiger counts, doesn't prove).
 
 ---
 
-## 21. CLI Surface
+## 21. Component / Module Map
+
+- `xtask-bin` — CLI: `gate`, `verify-attestation`, `sign-evidence`, `ledger`, `doctor`.
+- `xtask-core` — domain types (§5).
+- `xtask-policy` — policy loading, meta-policy, profile loading.
+- `xtask-lanes` — lane runners: `fmt`, `rustc`, `clippy`, `semgrep`, `assert_build_scan`, `test`, `supply`, `feature`, `build`, `mutants`.
+- `xtask-sandbox` — mount isolation, network-off, frozen PATH/env, cgroup caps, no sockets/agents.
+- `xtask-evidence` — canonical serialization (Borsh/postcard), Evidence computation, source manifest.
+- `xtask-signer` — Attestation signing, Ed25519 domain-separated, provenance verification, key_id, revocation.
+- `xtask-ledger` — SQLite hash-chained audit ledger.
+- `xtask-bypass` — parser-backed bypass scans.
+- `xtask-output` — report JSON schema (versioned), doctor diagnostics.
+
+---
+
+## 22. CLI Surface
 
 ```
 xtask gate [--input <crate|diff>] [--scope edit|prepush|full] [--emit json] [--out <path>]
-    Run scoped lanes. Emit report JSON + exit code. Emit evidence on Pass.
-    Every run appends a gate_run entry to the local ledger.
-
+xtask sign-evidence <evidence.json> [--out <attestation.json>]     # signer env only
 xtask verify-attestation <attestation.json> [--require-signature] [--require-scope full]
-    Deploy-gate: recompute digests, verify signature, check freshness, check CI ledger chain.
-
 xtask ledger verify
-    Walk the hash-chain from genesis to latest. Detect any tampering.
-
 xtask ledger query [--type <type>] [--limit <n>] [--source-digest <digest>]
-    Query the audit ledger. See what actually happened.
-
 xtask doctor [--scope <scope>]
-    Report required tools for the CURRENT scope/policy. Fail-closed.
 ```
 
-Exit codes: `0` Pass, `1` CodeReject, `2` GateReject, `3` PolicyError, `4` InputError, `>=5` internal.
+Exit: `0` Pass, `1` Reject, `2` PolicyError, `3` InputError, `>=4` internal.
 
 ---
 
-## 22. Definition of Done — Xtask v1
+## 23. Definition of Done — Phased (v1a → v1d)
 
-1. `xtask gate --scope edit` runs fmt, cargo check, clippy, semgrep, and the production panic/assert scan.
-2. `xtask gate --scope prepush` adds deterministic tests, supply-chain checks, and feature-powerset compilation.
-3. `xtask gate --scope full` adds mutation testing.
-4. A passing full gate emits deterministic evidence and, in CI only, a signed attestation.
-5. Deploy requires a full-scope CI-signed attestation binding source, artifact, policy, toolchain, dependency source, advisory database, feature profile, and layer evidence digests.
-6. Any unrunnable scoped layer forces fail-closed rejection.
-7. Code violations, gate failures, policy errors, and input errors are type-disjoint in the output schema.
-8. No inline bypass is accepted for gated first-party source; exceptions require policy files and policy PR review.
-9. Moon tasks `:gate` and `:deploy-gate` are wired.
-10. Xtask's own source passes the full gate.
-11. Killer demo: AI writes Rust with a `for` loop and `.unwrap()`; `xtask gate` rejects with typed `FUNC_LOOPS_*` and `HOLZMAN_PANIC_UNWRAP` findings; AI fixes the code; the full CI gate passes; the signed deploy attestation is accepted.
+**v1a — edit scope + report schema + policy + bypass:**
+1. `xtask gate --scope edit` runs fmt, check, clippy (source-only `--lib --bins`), semgrep, panic/assert+build.rs scan.
+2. Report schema: `Pass | Reject{code_findings, gate_failures, kind} | PolicyError | InputError`.
+3. Policy loading, validation, `policy_digest`.
+4. Parser-backed `#[allow]`/`#[expect]` bypass scan.
+5. `--frozen`, `CARGO_HOME`/`RUSTUP_HOME` controlled, absolute binary paths.
+
+**v1b — prepush scope + supply chain + tests + features:**
+6. `cargo test --workspace --frozen -- --test-threads=1`.
+7. Supply chain (audit/deny/vet/geiger/machete with triage baselines).
+8. Feature matrix (bounded-depth per policy).
+9. Scope-tiered tool requirements; `doctor` available-vs-trusted.
+
+**v1c — full scope + artifact build + mutants:**
+10. Artifact build lane: `cargo build --release --frozen --target --features`. `artifact_digest` + kind + target + profile in evidence.
+11. `cargo mutants` with baseline + triage.
+
+**v1d — evidence + signer + deploy + ledger:**
+12. Trusted-runner bootstrap (PRs gated by N-1, not self).
+13. Evidence isolation (`/evidence/` not writable by cargo children).
+14. Signer with provenance verification (workflow identity, runner image, schema, artifact).
+15. Deploy-gate: signature, freshness, epoch, artifact-bound, provenance.
+16. SQLite audit ledger (hash-chained, local + CI).
+17. Moon `sign-attestation` task, `deploy-gate` with `runInCI: 'always'` + explicit deps.
+18. Xtask's own source passes the full gate under the trusted runner.
+
+**Killer demo (after v1d):** AI writes Rust with `for` loop + `.unwrap()` → `xtask gate --scope edit` rejects with `FUNC_LOOPS_*` + `HOLZMAN_PANIC_UNWRAP` → AI fixes → full CI gate passes → signer issues attestation → deploy-gate accepts.
 
 ---
 
-## 23. References
+## 24. References
 
-- `holzman-rust/SKILL.md` + all 6 references (nasa-jpl-standards, latency-throughput-playbook, runtime-performance-architecture, zero-cost-abstractions, simd-patterns, mechanical-empathy-toolchain)
-- `functional-rust/SKILL.md` + all 3 references (scott-ddd-types, typing-refactor-checklist, complete-workflow)
-- `moon-v2/SKILL.md` — canonical `moon ci` gate
+- `holzman-rust/SKILL.md` + all 6 references
+- `functional-rust/SKILL.md` + all 3 references
+- `moon-v2/SKILL.md`
