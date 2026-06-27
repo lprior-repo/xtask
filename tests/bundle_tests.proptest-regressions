@@ -1,8 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc e5bbfe19af42af0413ae805413a5b76aaf407b023afe5a1aa428dc1d9e55785b # shrinks to bundle = EvidenceBundle { schema_version: "1.0", executor_context: ExecutorContext { agent: "", timestamp: "", machine: "" }, linked_bead_id: "", gates: [], source_test_mappings: [], release_artifacts: [ReleaseGateArtifact { name: "", path: "A ", digest: "", artifact_type: Benchmark }] }
-cc 1a6246096f9fcddaa21740feedc1499cf9e3b41bd60650091ebc4818fb927e40 # shrinks to bundle = EvidenceBundle { schema_version: "1.0", executor_context: ExecutorContext { agent: "", timestamp: "", machine: "" }, linked_bead_id: "", gates: [], source_test_mappings: [SourceTestMapping { source_path: "\u{2028}", tests: [] }], release_artifacts: [] }
