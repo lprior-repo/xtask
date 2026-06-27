@@ -45,6 +45,52 @@ ACT       Accepted code (valid certificate) ships
 
 The AI is the **primary invoker**, running Xtask dozens of times per task in a tight repair loop. CI/Moon is secondary (canonical deploy gate). Local human runs are tertiary.
 
+### 2.1 How AI Agents Leverage Xtask (end-to-end)
+
+Xtask is designed as the AI agent's verification layer. The agent never ships code that hasn't passed the gate. The repair loop:
+
+```
+1. AI writes Rust (targeting the curated crate stack, §5.9)
+2. AI runs: xtask gate --scope fast --emit json
+3. Xtask runs layers 0–6, returns structured verdict
+4. AI reads the disjoint verdict JSON:
+     - Pass → done, certificate emitted
+     - Reject → reads typed findings + repair hints, fixes code, goto 2
+     - GateFailure → recognizes infra issue (do NOT edit code), reports blocker
+     - PolicyError → recognizes policy issue (edit policy, not code)
+5. For performance-critical modules:
+     - AI marks module #[xtask::hot] with workload/budget declaration
+     - AI writes the Criterion/iai-callgrind benchmark
+     - AI runs: xtask gate --scope full --emit json
+     - Xtask runs the benchmark, compares against declared threshold
+     - Reject with PERF_* finding if latency/throughput/allocation over budget
+     - AI profiles (flamegraph/heaptrack), optimizes, re-runs
+6. Certificate emitted only on full Pass → deploy-gate accepts → code ships
+```
+
+**What the AI gets from each verdict finding (the repair contract):**
+
+| Finding type | What the AI does |
+|---|---|
+| `HOLZMAN_PANIC_UNWRAP` | Replace `.unwrap()` with `match`/`map_or_else` (ReplaceWith hint) |
+| `HOLZMAN_PANIC_INDEXING` | Replace `items[i]` with `items.get(i)` (ReplaceWith hint) |
+| `FUNC_LOOPS_IMPERATIVE` | Replace `for`/`while`/`loop` with iterator pipeline (UseIteratorPipeline hint) |
+| `FUNC_NESTING_DEPTH` | Decompose nested logic into named functions (FlattenNesting hint) |
+| `HOLZMAN_ARITHMETIC` | Replace raw `+` with `checked_add` (ReplaceWithCheckedArith hint) |
+| `HOLZMAN_UNSAFE` | Remove unsafe or request explicit waiver (RemoveUnsafeWaiver hint) |
+| `SUPPLY_BANNED_CRATE` | Replace banned crate with approved alternative (ReplaceWith hint) |
+| `MUTANT_SURVIVING` | Add a test that catches the mutation (RequiresHumanReview hint) |
+| `PERF_NO_BENCHMARK` | Write a named Criterion/iai-callgrind benchmark for the hot module |
+| `PERF_REGRESSION` | Profile (flamegraph/heaptrack), optimize bottleneck, re-run |
+| `PERF_ALLOCATION_OVER` | Reduce allocations (borrow, preallocate, arena, caller-owned buffer) |
+
+**Why this works for AI agents:**
+- The verdict is **deterministic** — same code always produces the same verdict. The AI's repair loop converges; no flapping.
+- The failure categories are **type-disjoint** — the AI never wastes a cycle trying to fix an infra failure by editing code.
+- The repair hints are **typed and machine-actionable** — `ReplaceWith{old, new}` is auto-applicable; `RequiresHumanReview` tells the AI to stop and escalate.
+- The certificate is **the trust artifact** — the AI cannot fabricate it; only a full Pass + CI signing produces it. Deploy-gate rejects without it.
+- The AI **cannot route around the gate** — no `--force`, no inline bypass, policy-PR is the only escape and that PR passes the same gate.
+
 ---
 
 ## 3. EARS Requirements
@@ -179,15 +225,55 @@ Production-reachable code is **rejected** if it contains:
 
 ### 5.4 PLUS Performance Gates (Holzman) — opt-in budget lanes
 
-These are correctness-of-claim gates, not correctness-of-compilation. They activate when a module is marked hot/critical in policy:
-- Latency budget (p50/p95/p99) — requires benchmark evidence
-- Throughput budget — requires benchmark evidence
-- Allocation budget — allocation-count gate; `try_reserve` on untrusted growth
-- Storage placement — measured stack/heap/arena choice
-- Cache layout — `size_of` review, field order, AoS/SoA
-- Static dispatch hot path — `dyn Trait` flagged in hot modules
-- SIMD discipline — scalar oracle + fallback + target gate + benchmark (unsafe SIMD needs explicit waiver)
-- Concurrency budget — bounded queues/tasks/retries; `await_holding_lock` deny
+These are correctness-of-claim gates, not correctness-of-compilation. They activate when a module is marked hot/critical in policy. **No performance claim is accepted without benchmark evidence.** The full Holzman PLUS extensions:
+
+| Extension | Requirement | Xtask enforcement |
+|---|---|---|
+| Workload definition | State target hardware, input distribution, hot path, threshold before optimizing | semgrep: hot-module must declare a `#[xtask::hot]` workload doc |
+| Latency budget | p50/p95/p99 or max latency when user-visible/real-time/networking | requires named benchmark passing threshold; `cargo bench` evidence |
+| Throughput budget | ops/sec, bytes/sec, req/sec under realistic batching+concurrency | requires named benchmark passing threshold |
+| Allocation budget | mission-critical: zero post-init alloc; perf-only: count/bound allocs | `try_reserve` on untrusted growth; clippy `box_collection`/semgrep `format!`-in-hot-path |
+| Storage placement | stack/heap/arena/pool chosen by measured size, lifetime, locality | architectural review; clippy flags `Vec` where `SmallVec`/`ArrayVec` wins |
+| Cache layout | `size_of` review, field order, padding, AoS vs SoA, false sharing | semgrep: hot struct flagged if `#[repr(C)]` absent and size > cache line |
+| Static dispatch | generics/enums/inline in hot paths; justify `dyn Trait` | clippy disallowed `dyn Trait` in `#[xtask::hot]` modules |
+| Branch behavior | split hot/cold; minimize unpredictable branches in tight loops | clippy `cognitive_complexity`; `#[cold]` on rare error paths |
+| Numeric semantics | `checked_*` for external input; `saturating_*` for counters; `wrapping_*` for hashes/ring-buffers; plain `+-*` only with local range proof | `arithmetic_side_effects` deny; semgrep flags raw `+`/`-`/`*` in hot modules |
+| SIMD discipline | scalar oracle + scalar fallback + target-feature gate + alignment/remainder + benchmark | unsafe SIMD forbidden; safe `std::simd`/auto-vectorization only; needs explicit waiver for `std::arch` |
+| Concurrency budget | bounded queues/tasks/retries/locks; document cancellation + lock ordering | `await_holding_lock` deny; semgrep unbounded `spawn`/`channel` |
+| Code size | monomorphization/inlining/feature-flag bloat when changed | `cargo bloat` + `cargo llvm-lines` on changed hot crates |
+| Regression guard | baseline + result + command + workload + pass/fail threshold recorded | benchmark must include before/after evidence in the verdict |
+
+**Mechanical Empathy Standard (the meta-rule):** fast Rust makes the machine do less work — fewer bytes moved, fewer cache misses, fewer heap allocations, fewer unpredictable branches, fewer locks/atomics/syscalls, fewer virtual calls. Do not accept performance claims based on style. Accept only measured bottleneck removal. Optimization hierarchy: algorithm → memory traffic → data layout → allocation → branch predictability → synchronization → compiler visibility → target-specific builds/SIMD.
+
+**Arithmetic Standard:** every integer operation must name its overflow behavior — `checked_*` (invalid input/invariants), `saturating_*` (counters/metrics), `wrapping_*` (hashes/checksums/ring-buffers), plain arithmetic only when type/range proof is local and obvious.
+
+**OOM discipline:** hot paths and untrusted-input paths that grow memory must declare max size, use checked arithmetic for capacity, call `try_reserve` when allocation failure must be graceful, and return typed resource errors. `Vec::new()` + unbounded push on untrusted data = Reject.
+
+**Benchmarking & Profiling Tool Stack** — these are the evidence tools Xtask wraps when a module is declared hot. A performance claim with NO benchmark is `BLOCKER`, not a pass.
+
+| Tool | Role | Xtask gate use |
+|---|---|---|
+| **Criterion** (`criterion = "0.8"`) | Statistical local benchmarks — p50/p95/p99, regression detection, outlier classification | Named `cargo bench --bench <name>` must exist + pass threshold for `#[xtask::hot]` modules |
+| **iai-callgrind** (`iai-callgrind = "0.16"`) | Deterministic instruction/cache regression — no timing noise, counts raw instructions | CI-stable regression gate where timing is too noisy; exact instruction-count comparison |
+| **hyperfine** | CLI command benchmark comparison — statistical, warmup-aware | Benchmarking Xtask's own binary and CLI-path performance claims |
+| **perf stat** | CPU hardware counters — cycles, instructions, cache-misses, branches, branch-misses | Profiler evidence required for cache/dispatch/branch claims |
+| **cargo flamegraph / samply** | Hot-path discovery — sampled stack profiles | Required when the AI claims "the bottleneck is X" — Xtask demands the flamegraph showing X |
+| **heaptrack / DHAT / bytehound** | Allocation profiling — count/bytes per site, peak memory | Required for allocation-budget claims; `allocations_apply_input = 0` assertions |
+| **cachegrind** (valgrind) | Cache simulation — cache-miss modeling without hardware variance | Portable cache-behavior evidence where perf counters vary |
+| **cargo bloat** | Binary size — which crates/types dominate the binary | Code-size gate; flags monomorphization bloat on changed hot crates |
+| **cargo llvm-lines** | IR line count per generic — monomorphization/code-size bloat | Flags generic functions that explode under feature-powerset |
+| **tokio-console / console-subscriber** | Async task/resource diagnostics — task stalls, contention | Required for async hot-path claims; flags tasks holding locks across await |
+
+**Xtask's benchmark gate contract (for `#[xtask::hot]` modules):**
+1. A named benchmark target (Criterion or iai-callgrind) MUST exist in the crate. Missing benchmark = `PERF_NO_BENCHMARK` finding.
+2. The benchmark MUST pass the declared latency/throughput threshold from policy. Regression = `PERF_REGRESSION` finding with before/after numbers.
+3. Allocation-sensitive modules MUST have heaptrack/DHAT evidence showing the allocation count is within budget. Over-budget = `PERF_ALLOCATION_OVER` finding.
+4. The verdict records the benchmark command, the measured numbers, the threshold, and the pass/fail. This is the regression guard — recorded in the certificate.
+
+**Forbidden for performance claims:**
+- Generic `cargo bench` as discovery only — it is NOT a named benchmark. Xtask requires a real target name.
+- Template command names — Xtask substitutes the actual repo benchmark name or reports `BLOCKER`.
+- "It looks idiomatic, therefore fast" — no style-based claims accepted.
 
 ### 5.5 Supply-Chain & Dependency Discipline (Holzman)
 
@@ -209,6 +295,122 @@ These are correctness-of-claim gates, not correctness-of-compilation. They activ
 - Allowed source features by default: `portable_simd`, `try_blocks` only.
 - `RUSTC_BOOTSTRAP` and arbitrary feature gates = policy violation.
 - Toolchain digest bound into the certificate.
+
+### 5.8 Strict Clippy Configuration (STUPIDLY strict — all groups maxed)
+
+Xtask enforces the maximum clippy strictness on gated source. Start with ALL lint groups denied, then allow-list only the few that are genuinely inapplicable. Tests are exempt from style gates (compile + behavior only).
+
+**The enforced `[workspace.lints.clippy]` on gated code:**
+
+```toml
+# --- ALL lint groups at maximum deny ---
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+restriction = { level = "warn", priority = -1 }   # warn all, deny the important ones below
+
+# --- Hard denies: panic surface (Holzman panic-free standard) ---
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+missing_panics_doc = "deny"        # if you document a panic, you shouldn't have one
+exit = "deny"                       # no std::process::exit
+
+# --- Hard denies: footgun access ---
+indexing_slicing = "deny"
+string_slice = "deny"
+get_unwrap = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+let_underscore_must_use = "deny"
+await_holding_lock = "deny"
+
+# --- Hard denies: functional-rust (no unwrap in ANY form) ---
+unwrap_or_default = "deny"
+unwrap_or_else = "deny"
+unwrap_or = "deny"
+
+# --- Hard denies: code quality ---
+too_many_lines = "deny"             # threshold 40
+too_many_arguments = "deny"         # threshold 5
+manual_unwrap_or_default = "deny"
+map_unwrap_or = "deny"
+str_to_string = "deny"
+string_to_string = "deny"
+suspicious_operation_groupings = "deny"
+tests_outside_test_module = "deny"
+unused_async = "deny"
+unused_self = "deny"
+wildcard_enum_match_arm = "warn"    # functional-rust: no wildcard arms in domain match
+missing_errors_doc = "deny"
+missing_const_for_fn = "warn"
+
+# --- Warns (promotion to deny via policy) ---
+shadow_unrelated = "warn"           # no variable shadowing
+print_stdout = "warn"               # use tracing, not println
+print_stderr = "warn"
+default_numeric_fallback = "deny"   # no implicit i32 default
+float_arithmetic = "warn"           # float in hot paths needs care
+rc_buffer = "warn"
+rc_mutex = "warn"
+mod_module_files = "deny"
+self_named_module_files = "deny"
+verbose_file_reads = "warn"
+use_debug = "warn"
+```
+
+**What clippy CANNOT express — those rules live in Layer 3 (semgrep), not custom lint code:**
+- No imperative loops (`for`/`while`/`loop`) — clippy has no blanket no-loops lint
+- Nesting depth > 2 — clippy `cognitive_complexity` is advisory, not a hard gate
+- `Result<T, String>` error type — clippy doesn't catch stringly-typed errors
+- Hidden I/O in helper functions — architectural, needs pattern matching
+- `format!`/`to_string()` in `#[xtask::hot]` modules — needs hot-module awareness
+
+Xtask does NOT build custom lint passes or compiler extensions. It wraps clippy at the above strictness and uses semgrep for the remainder. **Wrap tools, don't build them.**
+
+### 5.9 Allowed Library & Crate Policy (Holzman curated stack)
+
+Xtask enforces a curated crate allowlist via `cargo deny` config + clippy `disallowed_methods`/`disallowed_types` + semgrep. Only audited, Holzman-approved crates are permitted. Adding a non-approved crate requires a policy-PR.
+
+**Approved crates by purpose:**
+
+| Purpose | Approved crates | Notes |
+|---|---|---|
+| Async I/O | `tokio` | No CPU-heavy loops on async workers |
+| HTTP/API | `axum`, `tower`, `tower-http`, `hyper` | Enforce timeouts, limits, tracing |
+| CPU parallelism | `rayon` | Only for large independent work with scaling evidence |
+| Concurrency | `crossbeam-channel`, `parking_lot`, `flume` | Bounded queues only |
+| Buffers | `bytes`, `arrayvec`, `smallvec`, `heapless` | Choose by measured size/lifetime/cache |
+| Arenas | `bumpalo` | Only when many objects share one lifetime |
+| Maps | `hashbrown`, `ahash`, `rustc-hash` | Fast hashers for internal/non-adversarial keys only |
+| Immutable state | `rpds`, `arc-swap` | Structural-sharing snapshots, lock-free reads |
+| Concurrent state | `dashmap` | High-throughput; measured only |
+| Ergonomic pipelines | `itertools`, `tap` | Sync pipelines, linear pipe() flow |
+| Formats (binary) | `postcard` | Default compact Serde-compatible |
+| Formats (zero-copy) | `rkyv` | Audited zero-copy only |
+| JSON | `serde_json` | Default; `sonic-rs`/`simd-json` only when proven bottleneck |
+| Parsing | `winnow`, `nom`, `lexical-core` | Reduce handwritten parser risk |
+| Errors | `thiserror` (core), `anyhow` (shell) | No `Result<T, String>` in core |
+| Checksums | `crc32fast` | Fast non-crypto checksums |
+| Hashing (crypto) | `blake3` | Content-addressing digests |
+
+**Banned crates / methods (Reject on sight):**
+- New `bincode` usage (maintenance risk per Holzman)
+- `chrono::Local` direct calls (non-determinism)
+- Raw `rand::random()` / `thread_rng()` direct calls outside a controlled primitive
+- `std::sync::Mutex` in async handler scope (use `parking_lot` or sharding)
+- `std::cell::RefCell` in async/workflow scope
+- Fast non-cryptographic hashers for adversarial/user-controlled keys
+- `async_trait` in hot paths without measurement
+- `mimalloc`/`tikv-jemallocator` only after heap profiling proves allocator pressure remains
+
+**Xtask enforcement:** `cargo deny` config with the allowlist; clippy `disallowed_methods`/`disallowed_types` for method/type bans; semgrep for `chrono::Local`/`rand::random`/`std::sync::Mutex` in scope-sensitive positions.
 
 ---
 
