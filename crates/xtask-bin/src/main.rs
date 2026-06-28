@@ -164,6 +164,10 @@ fn parse_scope(s: &str) -> GateScope {
 }
 
 fn build_runners(scope: GateScope) -> Vec<Box<dyn LaneRunner>> {
+    // Edit-scope lanes are always registered.
+    // TODO: register TestLane, SupplyChainLane, FeatureMatrixLane for Prepush+.
+    // TODO: register MutantsLane for Full+.
+    // TODO: register ArtifactBuildLane for Release.
     let _ = scope;
     vec![
         Box::new(FmtLane),
