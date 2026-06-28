@@ -84,6 +84,7 @@ impl LaneRunner for ClippyLane {
             "--workspace".to_owned(),
             "--lib".to_owned(),
             "--bins".to_owned(),
+            "--frozen".to_owned(),
             "--message-format=json".to_owned(),
             "--".to_owned(),
         ];
@@ -97,7 +98,7 @@ impl LaneRunner for ClippyLane {
             Err(e) => {
                 return LaneOutcome::Failed(LaneFailure::InfraFailure {
                     tool: "cargo clippy".to_owned(),
-                    reason: e,
+                    reason: format!("{e:?}"),
                 });
             }
         };

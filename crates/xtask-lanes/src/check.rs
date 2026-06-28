@@ -13,7 +13,7 @@ use crate::process::run_command;
 
 const CHECK_TIMEOUT: Duration = Duration::from_mins(2);
 
-/// Runs `cargo check --workspace --all-targets --message-format=json`.
+/// Runs `cargo check --workspace --message-format=json`.
 pub struct CheckLane;
 
 /// A single JSON message from `cargo check --message-format=json`.
@@ -53,12 +53,7 @@ impl LaneRunner for CheckLane {
     fn run(&self) -> LaneOutcome {
         let result = match run_command(
             "cargo",
-            &[
-                "check",
-                "--workspace",
-                "--all-targets",
-                "--message-format=json",
-            ],
+            &["check", "--workspace", "--frozen", "--message-format=json"],
             None,
             CHECK_TIMEOUT,
         ) {
@@ -66,7 +61,7 @@ impl LaneRunner for CheckLane {
             Err(e) => {
                 return LaneOutcome::Failed(LaneFailure::InfraFailure {
                     tool: "cargo check".to_owned(),
-                    reason: e,
+                    reason: format!("{e:?}"),
                 });
             }
         };

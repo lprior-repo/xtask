@@ -31,7 +31,7 @@ impl LaneRunner for FmtLane {
             Err(e) => {
                 return LaneOutcome::Failed(LaneFailure::InfraFailure {
                     tool: "cargo fmt".to_owned(),
-                    reason: e,
+                    reason: format!("{e:?}"),
                 });
             }
         };

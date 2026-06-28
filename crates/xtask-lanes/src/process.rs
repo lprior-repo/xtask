@@ -5,6 +5,15 @@ use std::time::Duration;
 
 use xtask_core::ProcessTermination;
 
+/// Error from running an external process.
+#[derive(Debug)]
+pub enum ProcessError {
+    /// Command could not be spawned.
+    SpawnFailed { program: String, reason: String },
+    /// Waiting on the process failed.
+    WaitFailed { program: String, reason: String },
+}
+
 /// Result of running an external process.
 pub struct ProcessResult {
     /// How the process terminated.
@@ -44,7 +53,7 @@ pub fn run_command(
     args: &[&str],
     cwd: Option<&std::path::Path>,
     timeout: Duration,
-) -> Result<ProcessResult, String> {
+) -> Result<ProcessResult, ProcessError> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .stdout(std::process::Stdio::piped())
@@ -53,7 +62,10 @@ pub fn run_command(
         cmd.current_dir(dir);
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("spawn {program}: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| ProcessError::SpawnFailed {
+        program: program.to_owned(),
+        reason: e.to_string(),
+    })?;
 
     match wait_with_timeout(&mut child, timeout) {
         WaitOutcome::Exited(status) => {
@@ -66,7 +78,6 @@ pub fn run_command(
             })
         }
         WaitOutcome::TimedOut => {
-            // Kill the timed-out child; ignore kill errors since it may have already exited.
             drop(child.kill());
             drop(child.wait());
             Ok(ProcessResult {
@@ -75,7 +86,10 @@ pub fn run_command(
                 stderr: Vec::new(),
             })
         }
-        WaitOutcome::Error(e) => Err(format!("wait {program}: {e}")),
+        WaitOutcome::Error(e) => Err(ProcessError::WaitFailed {
+            program: program.to_owned(),
+            reason: e.to_string(),
+        }),
     }
 }
 

@@ -57,7 +57,7 @@ impl LaneRunner for PanicAssertScanLane {
             Err(e) => {
                 return LaneOutcome::Failed(LaneFailure::InfraFailure {
                     tool: "rg".to_owned(),
-                    reason: format!("rg not found or failed: {e}"),
+                    reason: format!("rg not found or failed: {e:?}"),
                 });
             }
         };
