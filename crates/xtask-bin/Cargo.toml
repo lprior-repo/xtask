@@ -18,7 +18,5 @@ xtask-policy = { workspace = true }
 xtask-lanes = { workspace = true }
 xtask-bypass = { workspace = true }
 xtask-output = { workspace = true }
-clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }

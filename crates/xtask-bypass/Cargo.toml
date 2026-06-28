@@ -10,4 +10,3 @@ workspace = true
 
 [dependencies]
 xtask-core = { workspace = true }
-thiserror = { workspace = true }

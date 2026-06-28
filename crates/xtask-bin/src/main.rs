@@ -1,57 +1,82 @@
+// xtask-bin — CLI entrypoint, no derive macros.
+
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
 use xtask_core::GateScope;
 use xtask_lanes::{CheckLane, ClippyLane, FmtLane, LaneRunner, PanicAssertScanLane, run_gate};
 
-#[derive(Parser)]
-#[command(name = "xtask", version, about = "Deterministic Rust quality gate")]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Run scoped quality lanes.
-    Gate {
-        #[arg(long, default_value = "edit")]
-        scope: String,
-        #[arg(long, default_value = "json")]
-        emit: String,
-    },
-    /// Report required tools, versions, and policy health.
-    Doctor {
-        #[arg(long)]
-        scope: Option<String>,
-    },
-    /// Explain a rule and show accepted repairs.
-    Explain { rule_id: String },
-}
-
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::Gate { scope, emit } => run_gate_command(&scope, &emit),
-        Command::Doctor { scope } => {
-            eprintln!(
-                "xtask doctor --scope {}",
-                scope.unwrap_or_else(|| "full".to_owned())
-            );
+    let args: Vec<String> = std::env::args().collect();
+    let subcommand = args.get(1).map(String::as_str);
+    let rest: &[String] = match args.get(2..) {
+        Some(r) => r,
+        None => &[],
+    };
+
+    match subcommand {
+        Some("gate") => cmd_gate(rest),
+        Some("doctor") => cmd_doctor(rest),
+        Some("explain") => cmd_explain(rest),
+        Some("--help" | "-h") => {
+            print_usage();
             ExitCode::SUCCESS
         }
-        Command::Explain { rule_id } => {
-            eprintln!("xtask explain {rule_id}");
-            ExitCode::SUCCESS
+        Some(cmd) => {
+            eprintln!("xtask: unknown command '{cmd}'");
+            print_usage();
+            ExitCode::from(3)
+        }
+        None => {
+            print_usage();
+            ExitCode::from(3)
         }
     }
 }
 
-fn run_gate_command(scope_str: &str, emit: &str) -> ExitCode {
-    let scope = parse_scope(scope_str);
-    let runners: Vec<Box<dyn LaneRunner>> = build_runners(scope);
+fn cmd_gate(args: &[String]) -> ExitCode {
+    let mut scope = "edit";
+    let mut emit = "json";
+    let mut i = 0;
+    while i < args.len() {
+        let current = match args.get(i) {
+            Some(s) => s.as_str(),
+            None => break,
+        };
+        match current {
+            "--scope" => {
+                let next = i.saturating_add(1);
+                if let Some(s) = args.get(next) {
+                    scope = s;
+                    i = next.saturating_add(1);
+                } else {
+                    eprintln!("xtask: --scope requires a value");
+                    return ExitCode::from(3);
+                }
+            }
+            "--emit" => {
+                let next = i.saturating_add(1);
+                if let Some(s) = args.get(next) {
+                    emit = s;
+                    i = next.saturating_add(1);
+                } else {
+                    eprintln!("xtask: --emit requires a value");
+                    return ExitCode::from(3);
+                }
+            }
+            "--help" | "-h" => {
+                eprintln!("xtask gate [--scope edit|prepush|full|release] [--emit json]");
+                return ExitCode::SUCCESS;
+            }
+            other => {
+                eprintln!("xtask gate: unknown flag '{other}'");
+                return ExitCode::from(3);
+            }
+        }
+    }
 
-    let report = run_gate(scope, &runners);
+    let gate_scope = parse_scope(scope);
+    let runners = build_runners(gate_scope);
+    let report = run_gate(gate_scope, &runners);
 
     if emit == "json" {
         match xtask_output::to_json(&report) {
@@ -59,7 +84,7 @@ fn run_gate_command(scope_str: &str, emit: &str) -> ExitCode {
                 println!("{json}");
             }
             Err(e) => {
-                eprintln!("error serializing report: {e}");
+                eprintln!("xtask: error serializing report: {e}");
                 return ExitCode::FAILURE;
             }
         }
@@ -93,6 +118,42 @@ fn run_gate_command(scope_str: &str, emit: &str) -> ExitCode {
     }
 }
 
+fn cmd_doctor(args: &[String]) -> ExitCode {
+    let scope_idx = args.iter().position(|a| a == "--scope");
+    let scope = scope_idx
+        .and_then(|i| {
+            let next = i.saturating_add(1);
+            args.get(next).map(String::as_str)
+        })
+        .unwrap_or("full");
+    eprintln!("xtask doctor --scope {scope}");
+    // TODO: implement doctor logic
+    ExitCode::SUCCESS
+}
+
+fn cmd_explain(args: &[String]) -> ExitCode {
+    args.first().map_or_else(
+        || {
+            eprintln!("xtask explain: missing rule-id");
+            ExitCode::from(3)
+        },
+        |rule_id| {
+            eprintln!("xtask explain {rule_id}");
+            // TODO: implement explain logic
+            ExitCode::SUCCESS
+        },
+    )
+}
+
+fn print_usage() {
+    eprintln!("xtask — deterministic Rust quality gate");
+    eprintln!();
+    eprintln!("USAGE:");
+    eprintln!("  xtask gate [--scope edit|prepush|full|release] [--emit json]");
+    eprintln!("  xtask doctor [--scope <scope>]");
+    eprintln!("  xtask explain <rule-id>");
+}
+
 fn parse_scope(s: &str) -> GateScope {
     match s {
         "prepush" => GateScope::Prepush,
@@ -103,8 +164,6 @@ fn parse_scope(s: &str) -> GateScope {
 }
 
 fn build_runners(scope: GateScope) -> Vec<Box<dyn LaneRunner>> {
-    // For now, all edit-scope lanes are always registered.
-    // Prepush/full lanes will be added as they're implemented.
     let _ = scope;
     vec![
         Box::new(FmtLane),

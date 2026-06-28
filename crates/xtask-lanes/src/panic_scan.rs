@@ -1,24 +1,29 @@
 //! Layer 4: production panic/assert macro scan using `rg`.
+//!
+//! Uses a tightened regex that requires `(` after the macro name, plus
+//! post-filtering of comment lines. This is heuristic — not a parser.
+//! False positives from block comments and string literals are a known
+//! residual. A parser-backed scan (syn) is a future improvement.
 
 use std::time::Duration;
 
 use xtask_core::{
-    Finding, FindingEffect, Lane, LaneEvidence, LaneFailure, LaneOutcome, Location,
-    ProcessTermination, RepairHint, RuleId, WorkspacePath,
+    CommandEvidence, Digest, Finding, FindingEffect, Lane, LaneEvidence, LaneFailure, LaneOutcome,
+    Location, ProcessTermination, RepairHint, RuleId, WorkspacePath,
 };
 
 use crate::LaneRunner;
 use crate::process::run_command;
 
-const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
+const SCAN_TIMEOUT: Duration = Duration::from_mins(1);
 
-/// Scans for `assert!`, `assert_eq!`, `assert_ne!`, `unreachable!` in production source.
+/// Scans for `assert!(`, `assert_eq!(`, `assert_ne!(`, `unreachable!(` in production source.
 ///
 /// Excludes tests, benches, examples, and build scripts.
 pub struct PanicAssertScanLane;
 
-/// The regex pattern for panic-producing macros in production code.
-const PANIC_PATTERN: &str = r"(^|[^A-Za-z0-9_])(assert!|assert_eq!|assert_ne!|unreachable!)";
+/// The regex pattern for panic-producing macro INVOCATIONS (requires opening paren).
+const PANIC_PATTERN: &str = r"(^|[^A-Za-z0-9_])(assert!|assert_eq!|assert_ne!|unreachable!)\s*\(";
 
 /// Glob exclusions for non-production code.
 const EXCLUDE_GLOBS: &[&str] = &[
@@ -95,19 +100,30 @@ fn parse_rg_matches(output: &str) -> Box<[Finding]> {
             (Some(f), Some(l), Some(m)) => (*f, *l, *m),
             _ => continue,
         };
+
+        // Skip comment lines — heuristic false-positive filter.
+        let trimmed = matched_text.trim_start();
+        if trimmed.starts_with("//")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+            || trimmed.starts_with("//!")
+        {
+            continue;
+        }
+
         let line_num = line_num_str.parse::<u32>().unwrap_or(1);
 
+        // Extract the macro name from the match
         let macro_name = matched_text
             .split(['(', '{', ' '])
             .next()
-            .unwrap_or("assert!");
+            .unwrap_or("assert!")
+            .trim();
 
         findings.push(Finding {
             lane: Lane::PanicAssertScan,
             rule_id: RuleId(
-                format!("HOLZMAN_PANIC_{macro_name}")
-                    .replace('!', "")
-                    .to_uppercase(),
+                format!("HOLZMAN_PANIC_{}", macro_name.replace('!', "")).to_uppercase(),
             ),
             location: Location::Span {
                 file: WorkspacePath(file.to_owned()),
@@ -129,12 +145,12 @@ fn parse_rg_matches(output: &str) -> Box<[Finding]> {
 
 fn make_evidence() -> LaneEvidence {
     LaneEvidence {
-        command: xtask_core::CommandEvidence {
+        command: CommandEvidence {
             executable: "rg".to_owned(),
             argv: Box::from(["rg".to_owned(), "-n".to_owned()]),
         },
         tool_version: String::new(),
         exit_status: ProcessTermination::Exited { code: 1 },
-        parsed_result_digest: xtask_core::Digest::from_bytes(b"clean"),
+        parsed_result_digest: Digest::from_bytes(b"clean"),
     }
 }

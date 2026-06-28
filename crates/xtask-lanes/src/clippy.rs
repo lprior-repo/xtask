@@ -85,6 +85,7 @@ impl LaneRunner for ClippyLane {
             "--lib".to_owned(),
             "--bins".to_owned(),
             "--message-format=json".to_owned(),
+            "--".to_owned(),
         ];
         for lint in CRITICAL_LINTS {
             args.push((*lint).to_owned());
