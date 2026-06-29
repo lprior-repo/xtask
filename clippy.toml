@@ -1,0 +1,14 @@
+# Holzman Rust thresholds (v1-spec §9.3)
+too-many-lines-threshold = 40
+too-many-arguments-threshold = 5
+max-fn-params-bools = 1
+type-complexity-threshold = 150
+cognitive-complexity-threshold = 10
+# Tests are exempt from the unwrap/expect/panic surface ban. The
+# Holzman gate forbids these in production source; tests verify behavior
+# with exact assertions and may panic on assertion failure.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+avoid-breaking-exported-api = false

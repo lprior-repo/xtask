@@ -1,0 +1,8 @@
+# Pinned by Moon (.moon/toolchains.yml `syncToolchainConfig: true`).
+# This file is the canonical Rust toolchain version for the workspace.
+# Manual edits are accepted but Moon may overwrite.
+
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

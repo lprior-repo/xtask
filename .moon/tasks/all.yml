@@ -1,0 +1,144 @@
+# MOON CI/CD IS THE ABSOLUTE FOUNDATION FOR ALL OF THIS WORK.
+# Every lane Titania-check evaluates is a Moon task. Tasks here are the
+# slice 1 surface: cargo-native idioms (fmt, lint-src, check, test, build,
+# audit, geiger) + composites (ci, quick). When slice 2 lands
+# titania-check binary and the dylint library, additional
+# `titania-*` tasks bolt on without touching these foundational ones.
+#
+# Holzman Rust posture: source code ZERO clippy tolerance, tests compile
+# with exact assertions but lenient on style. See moon-v2 skill.
+
+tasks:
+  # ---------- Cargo-native lanes ----------
+
+  fmt:
+    command: 'cargo fmt --all --check'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'rustfmt.toml'
+
+  lint-src:
+    # ZERO TOLERANCE for source. Catches ALL clippy issues.
+    command: 'cargo clippy --lib --bins --examples -- -D warnings -W clippy::all'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+
+  clippy-all:
+    # Stricter still: includes tests + benches + examples + workspace.
+    # Used by tn-igo dogfood gate; intentionally redundant with lint-src
+    # so `moon :lint-src` and `moon :clippy-all` can diverge in slice 2.
+    command: 'cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+
+  check:
+    command: 'cargo check --workspace --all-targets'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+  test:
+    # Lenient: tests verify behavior. No strict clippy enforcement.
+    command: 'cargo test --workspace --all-features'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+  build:
+    command: 'cargo build --workspace --release'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+    outputs:
+      - 'target/release/titania-check'
+
+  audit:
+    command: 'cargo audit'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'Cargo.lock'
+
+  deny:
+    command: 'cargo deny check'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'Cargo.lock'
+      - 'deny.toml'
+
+  geiger:
+    # Zero-unsafe surface report. cargo-geiger requires a binary target
+    # to scope to; until slice 2 adds a bin crate, we scope -p titania-core.
+    script: 'cargo geiger -p titania-core --all-features || true'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+
+  # ---------- Composites ----------
+
+  ci:
+    # Canonical Moon v2 CI gate. Runs affected targets, respects runInCI.
+    deps:
+      - '~:fmt'
+      - '~:lint-src'
+      - '~:clippy-all'
+      - '~:check'
+      - '~:test'
+      - '~:audit'
+      - '~:deny'
+      - '~:geiger'
+    options:
+      runInCI: true
+
+  quick:
+    # Fast dev loop: format + source lint + type check. No tests, no build.
+    deps:
+      - '~:fmt'
+      - '~:lint-src'
+      - '~:check'
+    options:
+      runInCI: false
+
+  pre-push:
+    # Pre-push validation: full strict source lint + tests + audit + geiger.
+    deps:
+      - '~:fmt'
+      - '~:clippy-all'
+      - '~:test'
+      - '~:audit'
+      - '~:geiger'
+    options:
+      runInCI: true

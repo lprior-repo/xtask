@@ -1,6 +1,99 @@
+# =====================================================================
+# Titania workspace gitignore.
+# MOON CI/CD is the absolute foundation; this ignore keeps the repo
+# clean of Moon / Cargo / IDE / OS scratch state while preserving
+# everything dogfooded into the gate.
+# =====================================================================
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
-.beads/proxieddb/
+# ----- Cargo / Rust -----------------------------------------------
+# Build artifacts.
+/target/
+
+# rustfmt backup files (cargo fmt renames the original to .rs.bk
+# mid-rewrite, then overwrites).
+**/*.rs.bk
+
+# Cargo's incremental / fingerprint caches.
+**/*.d
+**/*.rmeta
+**/*.rlib
+
+# Cargo.lock is committed for this workspace (slice 2 adds a bin
+# crate, after which Cargo.lock is required for reproducible builds).
+# Keep tracking it; uncomment if the project becomes pure-library-only.
+# /Cargo.lock
+
+# ----- Moon ------------------------------------------------------
+# Local cache: task hashes, run reports, bazel-remote hooks.
+/.moon/cache/
+
+# ----- Beads -----------------------------------------------------
+# Dolt data plane (issue tracker lives outside git history).
+/.dolt/
+/*.db
+/.beads-credential-key
+/.beads/proxieddb/
+
+# ----- IDE / Editor ---------------------------------------------
+# IntelliJ / JetBrains
+/.idea/
+*.iml
+*.iws
+
+# VS Code
+/.vscode/
+
+# Vim
+*.swp
+*.swo
+*~
+.viminfo
+
+# Emacs
+\#*\#
+/.dir-locals.el
+
+# ----- OS -------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.fuse_hidden*
+.Trash-*
+
+# ----- Coverage / Profiling ------------------------------------
+/coverage/
+/tarpaulin-report.html
+*.lcov
+*.profraw
+*.gcda
+*.gcno
+
+# ----- Secrets / Local Env -------------------------------------
+/.env
+/.env.local
+/.envrc
+
+# ----- Logs ----------------------------------------------------
+*.log
+logs/
+
+# ----- Tool caches (kept off the wire) -------------------------
+/.sccache/

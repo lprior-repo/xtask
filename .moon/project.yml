@@ -1,0 +1,17 @@
+# Project-level metadata for the titania Moon project.
+
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+# This is the Rust workspace root; the workspace's `Cargo.toml` lives here.
+type: 'library'
+
+language: 'rust'
+stack: 'rust'
+layer: 'application'
+
+# Toolchain and version metadata.
+metadata:
+  rust:
+    edition: '2024'
+    version: 'stable'
+

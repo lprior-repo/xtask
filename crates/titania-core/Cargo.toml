@@ -1,0 +1,25 @@
+[package]
+name = "titania-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Pure domain types for titania-check: typed Findings, Reports, Receipts."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+blake3 = "1.5"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+proptest = "1.5"
+
+[lints]
+workspace = true

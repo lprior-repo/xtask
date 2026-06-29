@@ -1,0 +1,49 @@
+[workspace]
+members  = [ "crates/titania-core" ]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Titania Contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+unreachable_pub = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+# Holzman Rust forbidden surface (slice 1).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+get_unwrap = "deny"
+arithmetic_side_effects = "deny"
+dbg_macro = "deny"
+as_conversions = "deny"
+let_underscore_must_use = "deny"
+await_holding_lock = "deny"
+# All correctness lints are on by default for `cargo clippy`; we rely on
+# the default. Pedantic/nursery/cargo land in the dedicated house-style
+# bead; they are intentionally relaxed here so slice 1 ships without
+# style churn.
+multiple_crate_versions = "allow"
+
+[workspace.metadata.titania]
+strict_ai = true
+schema_version = 1
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

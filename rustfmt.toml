@@ -1,0 +1,7 @@
+edition = "2024"
+max_width = 100
+tab_spaces = 4
+imports_granularity = "Crate"
+group_imports = "Preserve"
+reorder_imports = true
+use_small_heuristics = "Max"

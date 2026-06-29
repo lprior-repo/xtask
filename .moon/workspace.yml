@@ -1,0 +1,35 @@
+# MOON CI/CD IS THE ABSOLUTE FOUNDATION FOR ALL OF THIS WORK.
+# Titania-check is a Moon-native build orchestrator; every quality lane
+# (fmt, lint-src, clippy, dylint, ast-grep, titania-check) is a Moon task
+# driven through `moon ci`. Without Moon there is no Titania.
+
+# Schema: https://moonrepo.dev/schemas/workspace.json
+$schema: 'https://moonrepo.dev/schemas/workspace.json'
+
+vcs:
+  client: git
+  provider: github
+  defaultBranch: main
+  sync: true
+
+versionConstraint: '>=2.0.0'
+
+# Single-project workspace: the titania Cargo workspace IS the only
+# Moon project. tasks in tasks/all.yml inherit into this project.
+projects:
+  titania: '.'
+
+# Hash strategy. 'accuracy' for CI (lockfile-aware), 'performance' for dev.
+hasher:
+  optimization: 'accuracy'
+  walkStrategy: 'vcs'
+
+# Auto-install dependencies and sync workspace state on every `moon ci`.
+pipeline:
+  installDependencies: true
+  syncWorkspace: true
+  cacheLifetime: '7 days'
+
+telemetry: false
+
+
