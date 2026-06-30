@@ -1,6 +1,8 @@
 //! Typed errors for the domain primitives. One error enum per constructor,
 //! using `thiserror` so the messages are stable and machine-consumable.
 
+use std::io;
+
 use thiserror::Error;
 
 /// Errors produced by [`crate::Digest::new`].
@@ -47,6 +49,52 @@ pub enum TextRangeError {
     EndBeforeStart { start: u32, end: u32 },
 }
 
+/// Errors produced by [`crate::TargetProject::try_from_path`] and
+/// [`crate::discover_target`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum TargetProjectError {
+    #[error("target project path must not be empty")]
+    Empty,
+    #[error("target project path must be absolute, got {0:?}")]
+    NonAbsolute(String),
+    #[error("target project path is not valid UTF-8")]
+    NotUtf8,
+    #[error("target project path does not exist")]
+    NotFound,
+    #[error("target project path exists but is not a directory")]
+    NotADirectory,
+    #[error("target project directory does not contain a Cargo.toml file")]
+    NoCargoToml,
+    #[error("target project Cargo.toml path exists but is not a file")]
+    CargoTomlNotFile,
+    #[error("target project Cargo.toml is malformed: {path}")]
+    MalformedCargoToml { path: String },
+    #[error("I/O error accessing {path}: {kind:?}")]
+    Io { path: String, kind: io::ErrorKind },
+}
+
+/// Errors produced by [`crate::QualityReceipt`] and [`crate::LaneDigest`]
+/// constructors or deserialization.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ReceiptError {
+    #[error("unsupported receipt schema version {0}")]
+    UnsupportedSchemaVersion(u32),
+    #[error("lane name must not be empty")]
+    EmptyLaneName,
+    #[error("lane name must not contain NUL bytes")]
+    InvalidLaneName,
+    #[error("lane passed count {passed} exceeds scanned count {scanned}")]
+    PassedExceedsScanned { passed: u32, scanned: u32 },
+    #[error("receipt finished_at {finished_at} is before started_at {started_at}")]
+    FinishedBeforeStarted { started_at: u64, finished_at: u64 },
+    #[error("receipt target_root must not be empty")]
+    TargetRootEmpty,
+    #[error("receipt target_root must be absolute, got {0:?}")]
+    TargetRootNonAbsolute(String),
+    #[error("receipt target_root must not contain NUL bytes")]
+    TargetRootContainsNul,
+}
+
 /// Aggregate for callers that want a single error type across primitives.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CoreError {
@@ -58,4 +106,8 @@ pub enum CoreError {
     WorkspacePath(#[from] WorkspacePathError),
     #[error(transparent)]
     TextRange(#[from] TextRangeError),
+    #[error(transparent)]
+    TargetProject(#[from] TargetProjectError),
+    #[error(transparent)]
+    Receipt(#[from] ReceiptError),
 }

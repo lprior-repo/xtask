@@ -1,11 +1,11 @@
 # MOON CI/CD IS THE ABSOLUTE FOUNDATION FOR ALL OF THIS WORK.
-# Rust toolchain pinned to stable. We rely on the system-installed
+# Rust toolchain pinned to a dated nightly. We rely on the system-installed
 # cargo-* extensions (cargo-deny, cargo-audit, cargo-dylint, etc.) that
 # come from the standard $PATH — Moon does not auto-install them in
 # slice 1 to keep the bootstrap deterministic. Slice 2+ adds the
 # `bins:` list as the consuming lanes land.
 
 rust:
-  version: 'stable'
+  version: 'nightly-2026-04-27'
   syncToolchainConfig: true
 

@@ -3,6 +3,7 @@
 # Manual edits are accepted but Moon may overwrite.
 
 [toolchain]
-channel = "stable"
-components = ["rustfmt", "clippy"]
+channel = "nightly-2026-04-27"
+components = ["rustfmt", "clippy", "rust-src", "llvm-tools-preview"]
+targets = ["x86_64-unknown-linux-gnu"]
 profile = "minimal"

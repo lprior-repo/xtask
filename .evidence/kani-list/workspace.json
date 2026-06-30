@@ -1,0 +1,23 @@
+{
+  "kani-version": "0.67.0",
+  "file-version": "0.1",
+  "standard-harnesses": {
+    "crates/titania-core/src/kani.rs": [
+      "kani::lane_digest_accepts_passed_not_greater_than_scanned",
+      "kani::lane_digest_rejects_passed_greater_than_scanned",
+      "kani::lane_name_rejects_empty_string",
+      "kani::lane_name_rejects_nul_byte",
+      "kani::recorded_target_root_accepts_absolute_path",
+      "kani::recorded_target_root_rejects_empty_string",
+      "kani::recorded_target_root_rejects_nul_byte",
+      "kani::recorded_target_root_rejects_relative_path"
+    ]
+  },
+  "contract-harnesses": {},
+  "contracts": [],
+  "totals": {
+    "standard-harnesses": 8,
+    "contract-harnesses": 0,
+    "functions-under-contract": 0
+  }
+}

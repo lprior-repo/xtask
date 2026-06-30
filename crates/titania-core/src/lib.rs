@@ -21,13 +21,27 @@
 #![forbid(unsafe_code)]
 
 mod digest;
+mod discover;
 mod error;
+#[cfg(kani)]
+mod kani;
+mod receipt;
 mod rule_id;
+mod target_project;
 mod text_range;
 mod workspace_path;
 
 pub use digest::Digest;
-pub use error::{CoreError, DigestError, RuleIdError, TextRangeError, WorkspacePathError};
+pub use discover::discover_target;
+pub use error::{
+    CoreError, DigestError, ReceiptError, RuleIdError, TargetProjectError, TextRangeError,
+    WorkspacePathError,
+};
+pub use receipt::{
+    LaneDigest, LaneName, QualityReceipt, RECEIPT_SCHEMA_VERSION, ReceiptDigests, ReceiptLaneExit,
+    ReceiptPeriod, RecordedTargetRoot,
+};
 pub use rule_id::RuleId;
+pub use target_project::TargetProject;
 pub use text_range::TextRange;
 pub use workspace_path::WorkspacePath;

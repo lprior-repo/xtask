@@ -1,0 +1,141 @@
+[package]
+name = "titania-lanes"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Rust re-implementations of the velvet-ballistics CI/CD bash lanes, runnable as Moon tasks under .moon/tasks/all.yml."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "check-beads-server-mode"
+path = "src/bin/check_beads_server_mode.rs"
+
+[[bin]]
+name = "check-agent-cli-contract"
+path = "src/bin/check_agent_cli_contract.rs"
+
+[[bin]]
+name = "check-public-api-diff"
+path = "src/bin/check_public_api_diff.rs"
+
+[[bin]]
+name = "check-workspace-assertions"
+path = "src/bin/check_workspace_assertions.rs"
+
+[[bin]]
+name = "check-test-integrity"
+path = "src/bin/check_test_integrity.rs"
+
+[[bin]]
+name = "check-hot-cold-forbidden-apis"
+path = "src/bin/check_hot_cold_forbidden_apis.rs"
+
+[[bin]]
+name = "flux-check-package"
+path = "src/bin/flux_check_package.rs"
+
+[[bin]]
+name = "forbidden-scan"
+path = "src/bin/forbidden_scan.rs"
+
+[[bin]]
+name = "fuzz-minimization"
+path = "src/bin/fuzz_minimization.rs"
+
+[[bin]]
+name = "run-tlc-checks"
+path = "src/bin/run_tlc_checks.rs"
+
+[[bin]]
+name = "verify-lean"
+path = "src/bin/verify_lean.rs"
+
+[[bin]]
+name = "check-panic-surface"
+path = "src/bin/check_panic_surface.rs"
+
+[[bin]]
+name = "check-nightly-features"
+path = "src/bin/check_nightly_features.rs"
+
+[[bin]]
+name = "check-spelling-gate"
+path = "src/bin/check_spelling_gate.rs"
+
+[[bin]]
+name = "check-source-length"
+path = "src/bin/check_source_length.rs"
+
+[[bin]]
+name = "check-stepstate-matrix"
+path = "src/bin/check_stepstate_matrix.rs"
+
+[[bin]]
+name = "check-verus-production-binding"
+path = "src/bin/check_verus_production_binding.rs"
+
+[[bin]]
+name = "verify-no-legacy-primitives"
+path = "src/bin/verify_no_legacy_primitives.rs"
+
+[[bin]]
+name = "check-error-exhaustiveness"
+path = "src/bin/check_error_exhaustiveness.rs"
+
+[[bin]]
+name = "check-ignored-fallible-results"
+path = "src/bin/check_ignored_fallible_results.rs"
+
+[[bin]]
+name = "hotpath-scan"
+path = "src/bin/hotpath_scan.rs"
+
+[[bin]]
+name = "check-production-inner-drift"
+path = "src/bin/check_production_inner_drift.rs"
+
+[[bin]]
+name = "kani-list"
+path = "src/bin/kani_list.rs"
+
+[[bin]]
+name = "loom-list"
+path = "src/bin/loom_list.rs"
+
+[[bin]]
+name = "guard-zero-tests"
+path = "src/bin/guard_zero_tests.rs"
+
+[[bin]]
+name = "bench-instruction-counts"
+path = "src/bin/bench_instruction_counts.rs"
+
+[[bin]]
+name = "verify-verus"
+path = "src/bin/verify_verus.rs"
+
+[[bin]]
+name = "rust-verification-gauntlet"
+path = "src/bin/rust_verification_gauntlet.rs"
+
+[[bin]]
+name = "run-cargo"
+path = "src/bin/run_cargo.rs"
+
+[dependencies]
+titania-core = { path = "../titania-core" }
+serde_json = "1.0"
+smallvec = "1.15.2"
+wait-timeout = "0.2.1"
+thiserror = "2.0.18"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,5 +1,5 @@
 [workspace]
-members  = [ "crates/titania-core" ]
+members  = [ "crates/titania-core", "crates/titania-lanes" ]
 resolver = "3"
 
 [workspace.package]
@@ -13,6 +13,7 @@ unsafe_code = "forbid"
 unused_must_use = "deny"
 unreachable_pub = "deny"
 rust_2018_idioms = { level = "deny", priority = -1 }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 
 [workspace.lints.clippy]
 # Holzman Rust forbidden surface (slice 1).

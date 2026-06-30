@@ -7,6 +7,13 @@
 #
 # Holzman Rust posture: source code ZERO clippy tolerance, tests compile
 # with exact assertions but lenient on style. See moon-v2 skill.
+#
+# `titania-lanes` is a single workspace crate (`crates/titania-lanes`)
+# with 28 cargo bin targets. Each bin is a Rust re-implementation of a
+# bash CI lane that lived in the `velvet-ballistics` repo. The
+# corresponding Moon task runs the cargo binary directly so the lane
+# is cacheable by content hash and feeds the same typed artifacts
+# the bash originals produced.
 
 tasks:
   # ---------- Cargo-native lanes ----------
@@ -77,7 +84,7 @@ tasks:
       - 'Cargo.toml'
       - 'Cargo.lock'
     outputs:
-      - 'target/release/titania-check'
+      - 'target/release/run-cargo'
 
   audit:
     command: 'cargo audit'
@@ -97,17 +104,354 @@ tasks:
       - 'deny.toml'
 
   geiger:
-    # Zero-unsafe surface report. cargo-geiger requires a binary target
-    # to scope to; until slice 2 adds a bin crate, we scope -p titania-core.
-    script: 'cargo geiger -p titania-core --all-features || true'
+    # Zero-unsafe first-party surface report. cargo-geiger cannot run from
+    # this virtual workspace manifest, so scope to concrete package manifests.
+    script: >-
+      cargo geiger --manifest-path "$MOON_WORKSPACE_ROOT/crates/titania-core/Cargo.toml" --all-features --forbid-only
+      &&
+      cargo geiger --manifest-path "$MOON_WORKSPACE_ROOT/crates/titania-lanes/Cargo.toml" --all-features --forbid-only
     toolchains: [rust]
     options:
       runInCI: true
     inputs:
       - 'crates/**/*.rs'
       - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**/Cargo.toml'
+
+  # ---------- titania-lanes: 28 cargo bin targets ----------
+
+  lane-check-beads-server-mode:
+    command: 'cargo run --quiet -p titania-lanes --bin check-beads-server-mode'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_beads_server_mode.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - '.beads/metadata.json'
+
+  lane-check-agent-cli-contract:
+    command: 'cargo run --quiet -p titania-lanes --bin check-agent-cli-contract'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_agent_cli_contract.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/*.rs'
+      - 'velvet-ballistics-MASTER.md'
+
+  lane-check-public-api-diff:
+    command: 'cargo run --quiet -p titania-lanes --bin check-public-api-diff'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_public_api_diff.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/Cargo.toml'
+      - 'Cargo.lock'
+
+  lane-check-workspace-assertions:
+    command: 'cargo run --quiet -p titania-lanes --bin check-workspace-assertions'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_workspace_assertions.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+  lane-check-test-integrity:
+    command: 'cargo run --quiet -p titania-lanes --bin check-test-integrity'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_test_integrity.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/tests/**/*.rs'
+
+  lane-check-hot-cold-forbidden-apis:
+    command: 'cargo run --quiet -p titania-lanes --bin check-hot-cold-forbidden-apis'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_hot_cold_forbidden_apis.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'scripts/hot-cold-forbidden-apis.allow'
+      - 'crates/**/*.rs'
+
+  lane-flux-check-package:
+    command: 'cargo run --quiet -p titania-lanes --bin flux-check-package -- titania-core'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/flux_check_package.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/*.rs'
+
+  lane-forbidden-scan:
+    command: 'cargo run --quiet -p titania-lanes --bin forbidden-scan'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/forbidden_scan.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/*.rs'
+      - 'xtask/src/forbidden_scan.rs'
+
+  lane-fuzz-minimization:
+    command: 'cargo run --quiet -p titania-lanes --bin fuzz-minimization'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/fuzz_minimization.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'fuzz/Cargo.toml'
+
+  lane-run-tlc-checks:
+    command: 'cargo run --quiet -p titania-lanes --bin run-tlc-checks'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/run_tlc_checks.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'verification/tla/*.tla'
+      - 'verification/tla/*.cfg'
+
+  lane-verify-lean:
+    command: 'cargo run --quiet -p titania-lanes --bin verify-lean'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/verify_lean.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'proofs/lean/**'
+
+  lane-check-panic-surface:
+    command: 'cargo run --quiet -p titania-lanes --bin check-panic-surface'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_panic_surface.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/*.rs'
+
+  lane-check-nightly-features:
+    command: 'cargo run --quiet -p titania-lanes --bin check-nightly-features'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_nightly_features.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/*.rs'
+
+  lane-check-spelling-gate:
+    command: 'cargo run --quiet -p titania-lanes --bin check-spelling-gate'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_spelling_gate.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/*.rs'
+      - '**/*.md'
+      - '**/*.toml'
+      - '**/*.yaml'
+      - '**/*.sh'
+      - '**/*.py'
+
+  lane-check-source-length:
+    command: 'cargo run --quiet -p titania-lanes --bin check-source-length'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_source_length.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/*.rs'
+      - '.config/source-length-exceptions.txt'
+
+  lane-check-stepstate-matrix:
+    command: 'cargo run --quiet -p titania-lanes --bin check-stepstate-matrix'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_stepstate_matrix.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/step_state.rs'
+
+  lane-check-verus-production-binding:
+    command: 'cargo run --quiet -p titania-lanes --bin check-verus-production-binding'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_verus_production_binding.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'verification/verus/**/*.rs'
+
+  lane-verify-no-legacy-primitives:
+    command: 'cargo run --quiet -p titania-lanes --bin verify-no-legacy-primitives'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/verify_no_legacy_primitives.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/vb_validate/src/schema.rs'
+      - 'crates/vb_validate/src/schema_fields.rs'
+
+  lane-check-error-exhaustiveness:
+    command: 'cargo run --quiet -p titania-lanes --bin check-error-exhaustiveness'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_error_exhaustiveness.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'fuzz/**'
+      - 'crates/vb_storage/src/error/mod.rs'
+      - 'crates/vb_ipc/src/error.rs'
+      - 'crates/vb_validate/src/lib.rs'
+
+  lane-check-ignored-fallible-results:
+    command: 'cargo run --quiet -p titania-lanes --bin check-ignored-fallible-results'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_ignored_fallible_results.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/src/**/*.rs'
+      - 'xtask/src/**/*.rs'
+      - 'scripts/ignored-fallible-results.allow'
+
+  lane-hotpath-scan:
+    command: 'cargo run --quiet -p titania-lanes --bin hotpath-scan'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/hotpath_scan.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/vb_core/src/**/*.rs'
+      - 'crates/vb_runtime/src/**/*.rs'
+      - 'crates/vb_storage/src/**/*.rs'
+      - 'crates/vb_ipc/src/**/*.rs'
+      - 'scripts/hotpath-scan.allow'
+
+  lane-check-production-inner-drift:
+    command: 'cargo run --quiet -p titania-lanes --bin check-production-inner-drift'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/check_production_inner_drift.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'verification/verus/**/*.rs'
+      - 'crates/**/*.rs'
+
+  lane-kani-list:
+    command: 'cargo run --quiet -p titania-lanes --bin kani-list'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/kani_list.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/**/Cargo.toml'
+      - 'Cargo.lock'
+
+  lane-kani-core:
+    command: 'cargo kani -p titania-core --harness lane_name_rejects_empty_string --harness lane_name_rejects_nul_byte --harness lane_digest_rejects_passed_greater_than_scanned --harness lane_digest_accepts_passed_not_greater_than_scanned --harness recorded_target_root_rejects_empty_string --harness recorded_target_root_rejects_relative_path --harness recorded_target_root_rejects_nul_byte --harness recorded_target_root_accepts_absolute_path --default-unwind 16 -j 1'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/titania-core/Cargo.toml'
+      - 'crates/titania-core/src/lib.rs'
+      - 'crates/titania-core/src/kani.rs'
+      - 'crates/titania-core/src/receipt.rs'
+      - 'crates/titania-core/src/receipt/target_root.rs'
+
+  lane-loom-list:
+    command: 'cargo run --quiet -p titania-lanes --bin loom-list'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/loom_list.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'xtask/src/main.rs'
+
+  lane-guard-zero-tests:
+    command: 'cargo run --quiet -p titania-lanes --bin guard-zero-tests -- cargo test --workspace --all-features'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/guard_zero_tests.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+
+  lane-bench-instruction-counts:
+    command: 'cargo run --quiet --release -p titania-lanes --bin bench-instruction-counts'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/bench_instruction_counts.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/velvet-ballistics-workspace-tests/benches/**'
+
+  lane-verify-verus:
+    command: 'cargo run --quiet -p titania-lanes --bin verify-verus'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/verify_verus.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'contracts/proof_obligations.yaml'
+      - 'verification/verus/**/*.rs'
+      - 'contracts/verus/**/*.rs'
+
+  lane-rust-verification-gauntlet:
+    command: 'cargo run --quiet -p titania-lanes --bin rust-verification-gauntlet'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/bin/rust_verification_gauntlet.rs'
+      - 'crates/titania-lanes/src/lib.rs'
+      - 'crates/vb_compile/**'
+      - 'crates/vb_runtime/**'
 
   # ---------- Composites ----------
+
+  formal:
+    # Scope-bound verifier setup for target-project work.
+    deps:
+      - '~:lane-flux-check-package'
+      - '~:lane-kani-core'
+      - '~:lane-verify-verus'
+    options:
+      runInCI: true
 
   ci:
     # Canonical Moon v2 CI gate. Runs affected targets, respects runInCI.

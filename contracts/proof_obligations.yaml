@@ -1,0 +1,4 @@
+version: 1
+targets:
+  - path: verification/verus/formal_setup_smoke.rs
+  - path: verification/verus/receipt_schema.rs
