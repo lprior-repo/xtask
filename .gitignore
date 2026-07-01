@@ -97,3 +97,7 @@ logs/
 
 # ----- Tool caches (kept off the wire) -------------------------
 /.sccache/
+
+# ----- Stray bench artifacts ------------------------------------
+/formal_setup_smoke
+/receipt_schema
