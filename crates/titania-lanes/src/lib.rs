@@ -31,6 +31,7 @@ use titania_core::{TargetProject, TargetProjectError, discover_target};
 pub mod command;
 pub mod helpers;
 pub mod source_line;
+pub mod walk;
 
 pub use command::{CommandBudget, CommandIn, CommandOutput, EnvPolicy, LaneError, OutputStream};
 pub use source_line::SourceLine;

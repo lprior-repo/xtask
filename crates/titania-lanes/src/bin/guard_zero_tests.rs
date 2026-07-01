@@ -96,7 +96,14 @@ fn run_lane(target: &TargetProject, cmd_args: &[String]) -> Result<(), GuardErro
 }
 
 fn parse_command_args(cmd_args: &[String]) -> Result<ParsedCommand<'_>, String> {
-    cmd_args
+    // Strip a leading `--` separator so callers can pass it conventionally
+    // (`guard-zero-tests -- /bin/sh -c '...'`). Without this, `--` becomes
+    // the program name and the lane tries to run a binary called `--`.
+    let trimmed: &[String] = match cmd_args.split_first() {
+        Some((first, rest)) if first == "--" => rest,
+        _ => cmd_args,
+    };
+    trimmed
         .split_first()
         .map(|(program, passthrough)| (program.as_str(), passthrough))
         .ok_or_else(|| "guard-zero-tests: empty command".to_string())
@@ -234,16 +241,26 @@ fn cargo_test_passed_count(line: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
-    use titania_core::TargetProject;
-    use titania_lanes::LaneExit;
-
     use super::{libtest_passed_count, parse_command_args, running_line_count, sum_line_counts};
 
     #[test]
     fn parse_command_args_rejects_empty() {
         let result = parse_command_args(&[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_command_args_strips_leading_dashdash_separator() {
+        let args: Vec<String> = vec!["--".into(), "/bin/sh".into(), "-c".into(), "true".into()];
+        let (program, passthrough) = parse_command_args(&args).expect("non-empty");
+        assert_eq!(program, "/bin/sh");
+        assert_eq!(passthrough, &["-c", "true"]);
+    }
+
+    #[test]
+    fn parse_command_args_rejects_only_dashdash() {
+        let only_dashdash: Vec<String> = vec!["--".into()];
+        let result = parse_command_args(&only_dashdash);
         assert!(result.is_err());
     }
 

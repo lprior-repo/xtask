@@ -1,3 +1,4 @@
+use aho_corasick::{AhoCorasick, MatchKind};
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -31,8 +32,15 @@ pub(crate) fn main_exit(args: Vec<String>) -> ExitCode {
         Ok(root) => root,
         Err(code) => return code,
     };
+    let ac = match build_forbidden_ac(&forbidden) {
+        Ok(ac) => ac,
+        Err(message) => {
+            eprintln!("[forbidden-scan] {message}");
+            return exit(LaneExit::Usage);
+        }
+    };
     emit_scan_header(&root, &forbidden);
-    scan_and_exit(&root, &forbidden)
+    scan_and_exit(&root, &forbidden, &ac)
 }
 
 fn target_root() -> Result<PathBuf, ExitCode> {
@@ -50,12 +58,11 @@ fn emit_scan_header(root: &Path, forbidden: &[ForbiddenToken]) {
         forbidden.iter().map(ForbiddenToken::as_str).collect::<Vec<_>>().join(",")
     );
 }
-
-fn scan_and_exit(root: &Path, forbidden: &[ForbiddenToken]) -> ExitCode {
+fn scan_and_exit(root: &Path, forbidden: &[ForbiddenToken], ac: &AhoCorasick) -> ExitCode {
     let mut report = LaneReport::new();
-    collect_source_files(root)
+    titania_lanes::walk::production_rust_files_par(root)
         .iter()
-        .for_each(|file| scan_file(root, file, forbidden, &mut report));
+        .for_each(|file| scan_file(root, file, forbidden, ac, &mut report));
     eprint!("{}", report.render());
     if report.is_clean() { clean_exit() } else { violations_exit() }
 }
@@ -90,64 +97,56 @@ fn default_forbidden_set() -> Vec<ForbiddenToken> {
     DEFAULT_FORBIDDEN.iter().filter_map(|s| ForbiddenToken::parse(s)).collect()
 }
 
-fn collect_source_files(root: &Path) -> Vec<PathBuf> {
-    let crates_dir = root.join("crates");
-    let Ok(entries) = std::fs::read_dir(crates_dir) else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(Result::ok)
-        .map(|e| e.path().join("src"))
-        .filter(|p| p.is_dir())
-        .flat_map(walk_rust_files)
-        .collect()
+/// Build the Aho-Corasick automaton from the forbidden token surface.
+/// Construction is infallible in practice (the patterns are all static
+/// literals), but the underlying builder returns a `Result`; we map any
+/// builder failure into a typed diagnostic for the caller. An empty
+/// forbidden set also returns an empty-pattern error which we propagate
+/// the same way.
+fn build_forbidden_ac(forbidden: &[ForbiddenToken]) -> Result<AhoCorasick, String> {
+    let names: Vec<&str> = forbidden.iter().map(ForbiddenToken::as_str).collect();
+    AhoCorasick::builder()
+        .match_kind(MatchKind::LeftmostFirst)
+        .build(&names)
+        .map_err(|error| format!("forbidden AC build failed for {} patterns: {error}", names.len()))
 }
 
-fn walk_rust_files(dir: PathBuf) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = Vec::new();
-    let mut stack: Vec<PathBuf> = vec![dir];
-    while let Some(top) = stack.pop() {
-        append_rust_files(&top, &mut stack, &mut out);
-    }
-    out.sort();
-    out
-}
-
-fn append_rust_files(top: &Path, stack: &mut Vec<PathBuf>, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(top) else {
-        return;
-    };
-    entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .for_each(|path| record_path(path, stack, out));
-}
-
-fn record_path(path: PathBuf, stack: &mut Vec<PathBuf>, out: &mut Vec<PathBuf>) {
-    if path.is_dir() {
-        stack.push(path);
-    } else if path.extension().is_some_and(|e| e == "rs") {
-        out.push(path);
-    }
-}
-
-fn scan_file(root: &Path, path: &Path, forbidden: &[ForbiddenToken], report: &mut LaneReport) {
+fn scan_file(
+    root: &Path,
+    path: &Path,
+    forbidden: &[ForbiddenToken],
+    ac: &AhoCorasick,
+    report: &mut LaneReport,
+) {
     report.record_scan();
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
     let display = relative_path(root, path);
-    scan_content(&content, &display, forbidden, report);
+    scan_content(&content, &display, forbidden, ac, report);
 }
 
 fn scan_content(
     content: &str,
     display: &str,
     forbidden: &[ForbiddenToken],
+    ac: &AhoCorasick,
     report: &mut LaneReport,
 ) {
+    // File-level prefilter: if Aho-Corasick finds no matches anywhere in
+    // the file, skip the per-line parse+match work entirely. This is
+    // the dominant wall-time cost when most files contain zero
+    // forbidden tokens (the common case for non-self-test sources).
+    if ac.find_iter(content).next().is_none() {
+        return;
+    }
     let mut block_comment = false;
     content.lines().enumerate().for_each(|(idx, line)| {
+        // Per-line gate: skip SourceLine::parse on lines that can't
+        // possibly contain any forbidden token.
+        if !ac.is_match(line) {
+            return;
+        }
         let source_line = SourceLine::parse(line, &mut block_comment);
         scan_source_line(&source_line, idx, display, forbidden, report);
     });

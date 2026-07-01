@@ -122,12 +122,11 @@ fn cargo_output(
     lane: CargoLane,
     extra_args: &[String],
 ) -> Result<titania_lanes::CommandOutput, LaneError> {
-    let manifest = target.manifest_path();
     let mut command = CommandIn::new(target, "cargo")?;
     command.inherit_env();
     match lane {
         CargoLane::Fmt => {
-            command.arg("fmt").arg("--check").arg("--manifest-path").arg(manifest.as_str());
+            command.arg("fmt").arg("--check");
         }
         CargoLane::Compile => {
             command.arg("check").arg("--workspace").arg("--all-targets").arg("--frozen");

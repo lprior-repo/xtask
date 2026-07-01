@@ -1,0 +1,8 @@
+# hot-cold-forbidden-apis allowlist.
+#
+# Format (6 pipe-separated fields):
+#   <crates/.../path.rs>|<class>|owner=<...>|reviewed_by=<...>|test=<...>|reason=<...>
+#
+# Each row grants an exception for a specific (path, class) pair in the
+# hot-path API scanner. Add only with a reviewed plan; do not park
+# exceptions here forever.

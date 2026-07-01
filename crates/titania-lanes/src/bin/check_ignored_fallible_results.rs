@@ -29,13 +29,14 @@ fn main() -> ExitCode {
         }
     };
     let mut report = LaneReport::new();
-    run(target.as_std_path(), &mut report);
+    let ac = scan::build_fallible_signal_ac();
+    run(target.as_std_path(), ac.as_ref(), &mut report);
     print_and_exit(&report)
 }
 
-fn run(root: &Path, report: &mut LaneReport) {
+fn run(root: &Path, ac: Option<&aho_corasick::AhoCorasick>, report: &mut LaneReport) {
     let allow = allow::load_allow(root, report);
-    scan::scan(root, &allow, report);
+    scan::scan(root, ac, &allow, report);
 }
 
 fn print_and_exit(report: &LaneReport) -> ExitCode {

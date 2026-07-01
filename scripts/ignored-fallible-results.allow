@@ -1,0 +1,9 @@
+# check-ignored-fallible-results allowlist.
+#
+# Format (7 pipe-separated fields):
+#   <path>|<class>|owner=<owner>|expiry=<YYYY-MM-DD>|follow_up=<bead-id>|reason=<text>
+#
+# Each row grants an exception for a specific (path, DISCARD-class) pair.
+# Owner is accountable; expiry forces re-justification. Use sparingly.
+
+crates/titania-lanes/src/bin/check_panic_surface.rs|DISCARD-001|owner=lane-owners|expiry=2026-12-31|follow_up=tn-dhr-allowlist|reason=cfg_open_depths / kani_open_depths are intentional scope stacks; the discard on push/pop is by design (the lane only cares about the dropped return value)

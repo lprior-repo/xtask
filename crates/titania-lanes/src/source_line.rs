@@ -50,6 +50,20 @@ impl SourceLine {
         parsed.line
     }
 
+    /// Fast path: classify a line without invoking the full parser if it
+    /// contains no comment markers or string delimiters. The line is
+    /// then guaranteed to be pure code (or whitespace), so the parser
+    /// is skipped entirely and the code is just cloned as-is.
+    #[must_use]
+    pub fn parse_simple(raw: &str) -> Self {
+        if raw.bytes().any(|b| matches!(b, b'/' | b'"' | b'\\')) {
+            Self::parse(raw, &mut false)
+        } else if raw.trim().is_empty() {
+            Self::NonCode
+        } else {
+            Self::Code(raw.to_owned())
+        }
+    }
     /// True if the line was entirely comments or string contents.
     #[must_use]
     pub fn is_non_code(&self) -> bool {
@@ -128,6 +142,7 @@ impl<'a> SourceLineParser<'a> {
         } else if ch == '"' {
             self.in_string = false;
         }
+        self.code.push(' ');
         true
     }
 
@@ -222,5 +237,47 @@ mod tests {
         assert!(code.starts_with("let s = "));
         assert!(code.ends_with(";"));
         assert!(!code.contains(r#"a\"b"#));
+    }
+
+    #[test]
+    fn preserves_columns_across_string() {
+        let raw = r#"let _ = panic!("nope");"#;
+        let parsed = SourceLine::parse(raw, &mut false);
+        match parsed {
+            SourceLine::Code(s) => assert_eq!(s.len(), raw.len(), "column count must be preserved"),
+            SourceLine::NonCode => panic!("expected Code"),
+        }
+    }
+
+    #[test]
+    fn parse_simple_no_special_chars_returns_code() {
+        let raw = "let x = 1;";
+        let parsed = SourceLine::parse_simple(raw);
+        match parsed {
+            SourceLine::Code(s) => assert_eq!(s, raw),
+            SourceLine::NonCode => panic!("expected Code, got NonCode"),
+        }
+    }
+
+    #[test]
+    fn parse_simple_whitespace_returns_non_code() {
+        let parsed = SourceLine::parse_simple("   \t  ");
+        assert!(matches!(parsed, SourceLine::NonCode));
+    }
+
+    #[test]
+    fn parse_simple_with_slash_falls_back_to_full_parse() {
+        // Line comment triggers the fallback branch (any '/' in the line).
+        let parsed = SourceLine::parse_simple("// pure comment");
+        assert!(parsed.is_non_code());
+    }
+
+    #[test]
+    fn parse_simple_with_string_falls_back_to_full_parse() {
+        let parsed = SourceLine::parse_simple(r#"let s = "hi";"#);
+        match parsed {
+            SourceLine::Code(s) => assert!(s.contains("let s = ")),
+            SourceLine::NonCode => panic!("expected Code, got NonCode"),
+        }
     }
 }

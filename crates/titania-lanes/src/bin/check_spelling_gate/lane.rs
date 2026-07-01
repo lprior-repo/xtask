@@ -1,14 +1,11 @@
 use std::{
+    env,
     path::{Path, PathBuf},
     process::ExitCode,
+    sync::OnceLock,
 };
 
 use titania_lanes::{Finding, LaneExit, LaneReport, current_target_project, exit};
-
-/// Candidate wrong-spelling token. A [`SpellingRule`] makes the lane
-/// applicable only when this differs from the canonical spelling.
-const WRONG_SPELLING: &str = "velvet-ballistics";
-const CANONICAL_SPELLING: &str = "velvet-ballistics";
 
 /// File extensions we scan (matches the bash `--include` list).
 const SCAN_EXTENSIONS: &[&str] = &["rs", "toml", "yaml", "yml", "md", "sh", "py"];
@@ -47,8 +44,22 @@ pub(crate) fn main_exit() -> ExitCode {
     run_for_root(target.as_std_path(), &rule)
 }
 
+static WRONG_BUF: OnceLock<String> = OnceLock::new();
+static CANONICAL_BUF: OnceLock<String> = OnceLock::new();
+
 fn spelling_rule() -> Result<SpellingRule<'static>, ExitCode> {
-    SpellingRule::parse(WRONG_SPELLING, CANONICAL_SPELLING).map_err(|error| match error {
+    let wrong_value = env::var("TITANIA_WRONG_SPELLING").map_err(|_| not_applicable_rule_exit())?;
+    let canonical_value =
+        env::var("TITANIA_CANONICAL_SPELLING").map_err(|_| not_applicable_rule_exit())?;
+    if wrong_value == canonical_value
+        || wrong_value.trim().is_empty()
+        || canonical_value.trim().is_empty()
+    {
+        return Err(invalid_rule_exit());
+    }
+    let wrong: &'static str = WRONG_BUF.get_or_init(|| wrong_value).as_str();
+    let canonical: &'static str = CANONICAL_BUF.get_or_init(|| canonical_value).as_str();
+    SpellingRule::parse(wrong, canonical).map_err(|error| match error {
         SpellingRuleError::IdenticalTerms => not_applicable_rule_exit(),
         SpellingRuleError::EmptyTerm => invalid_rule_exit(),
     })

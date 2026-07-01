@@ -1,0 +1,13 @@
+# Source-length exceptions ledger.
+#
+# Format (5 pipe-separated fields, no leading/trailing spaces):
+#   <repo-relative .rs path>|<owner>|<split bead>|<removal plan>|<reason>
+#
+# Each row grants a one-line exception to the 300-line source-length cap
+# (`check-source-length` lane). The owner is accountable for closing the
+# exception before the bead completes. Use this file ONLY for files that
+# are slated to be split; do not park files here forever.
+
+crates/titania-lanes/src/bin/check_nightly_features.rs|lane-owners|tn-split-check-nightly-features|split into collect_features/parse_collector/check_feature submodules|file exceeded 300 lines while growing the multi-line attribute collector and the perf-scope check; will split into submodules under check_nightly_features/
+crates/titania-lanes/src/bin/forbidden_scan/lane.rs|lane-owners|tn-split-forbidden-scan-lane|split ForbiddenToken and scanner from main lane shell|file exceeded 300 lines after adding TokenKind boundary detection; will extract forbidden_token.rs and forbid_scanner.rs
+crates/titania-lanes/src/bin/run_cargo.rs|lane-owners|tn-split-run-cargo|split per-lane command builders from main runner|file exceeded 300 lines while growing the per-lane CargoLane match arms; will extract cargo_lane_command.rs that returns the CommandIn for each variant
