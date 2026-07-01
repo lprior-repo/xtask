@@ -103,12 +103,33 @@ fn default_forbidden_set() -> Vec<ForbiddenToken> {
 /// builder failure into a typed diagnostic for the caller. An empty
 /// forbidden set also returns an empty-pattern error which we propagate
 /// the same way.
-fn build_forbidden_ac(forbidden: &[ForbiddenToken]) -> Result<AhoCorasick, String> {
+fn build_forbidden_ac(forbidden: &[ForbiddenToken]) -> Result<AhoCorasick, ForbiddenAcBuildError> {
     let names: Vec<&str> = forbidden.iter().map(ForbiddenToken::as_str).collect();
+    let count = names.len();
     AhoCorasick::builder()
         .match_kind(MatchKind::LeftmostFirst)
         .build(&names)
-        .map_err(|error| format!("forbidden AC build failed for {} patterns: {error}", names.len()))
+        .map_err(|source| ForbiddenAcBuildError::Build { count, source })
+}
+
+/// Typed error for the Aho-Corasick pattern set construction.
+#[derive(Debug)]
+enum ForbiddenAcBuildError {
+    Build { count: usize, source: aho_corasick::BuildError },
+}
+
+impl std::fmt::Display for ForbiddenAcBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ForbiddenAcBuildError::Build { count, source } = self;
+        write!(f, "forbidden AC build failed for {count} patterns: {source}")
+    }
+}
+
+impl std::error::Error for ForbiddenAcBuildError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        let ForbiddenAcBuildError::Build { count: _, source } = self;
+        Some(source)
+    }
 }
 
 fn scan_file(
