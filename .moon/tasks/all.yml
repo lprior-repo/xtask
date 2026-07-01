@@ -110,6 +110,8 @@ tasks:
       cargo geiger --manifest-path "$MOON_WORKSPACE_ROOT/crates/titania-core/Cargo.toml" --all-features --forbid-only
       &&
       cargo geiger --manifest-path "$MOON_WORKSPACE_ROOT/crates/titania-lanes/Cargo.toml" --all-features --forbid-only
+      &&
+      cargo geiger --manifest-path "$MOON_WORKSPACE_ROOT/crates/titania-lints/Cargo.toml" --all-features --forbid-only
     toolchains: [rust]
     options:
       runInCI: true
@@ -441,6 +443,58 @@ tasks:
       - 'crates/titania-lanes/src/lib.rs'
       - 'crates/vb_compile/**'
       - 'crates/vb_runtime/**'
+
+  # ---------- Titania v1 surface aliases ----------
+
+  titania-fmt:
+    command: 'cargo fmt --all --check'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'rustfmt.toml'
+
+  titania-clippy:
+    command: 'cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+
+  titania-lint:
+    command: 'cargo check -p titania-lints --tests'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lints/**/*.rs'
+      - 'crates/titania-lints/Cargo.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+  titania-ast-grep:
+    command: 'cargo test -p titania-lanes ast_grep_catalog'
+    toolchains: [rust]
+    options:
+      runInCI: true
+    inputs:
+      - 'crates/titania-lanes/src/ast_grep_catalog.rs'
+      - 'crates/titania-lanes/rules/*.yml'
+      - 'crates/titania-lanes/tests/**/*ast_grep*'
+
+  titania-check:
+    deps:
+      - '~:titania-fmt'
+      - '~:titania-clippy'
+      - '~:titania-lint'
+      - '~:titania-ast-grep'
+    options:
+      runInCI: true
 
   # ---------- Composites ----------
 
