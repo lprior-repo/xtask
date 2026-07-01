@@ -27,7 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
-use titania_lanes::{Finding, LaneExit, LaneReport, current_target_project, exit};
+use titania_lanes::{Finding, LaneExit, LaneReport, SourceLine, current_target_project, exit};
 
 /// Macros the bash lane flags. Kept as a single array so additions land
 /// in one obvious place.
@@ -149,39 +149,58 @@ fn scan_file(root: &Path, path: &Path, report: &mut LaneReport) {
     };
 
     let display = rel_str(root, path);
+    // Stacks of (synthetic_open_added, global_brace_depth_at_open).
+    // `cfg_open` is +1 because the cfg attribute itself has no `{`; the
+    // matching `{` lands on the `mod tests {` / `fn proof_fn() {` line
+    // that follows. The scope closes when the global brace depth drops
+    // back to the snapshotted depth.
     let mut cfg_depth: u32 = 0;
     let mut kani_proof_depth: u32 = 0;
-    let mut brace_depth_at_cfg_open: u32 = 0;
-    let mut brace_depth_at_kani_open: u32 = 0;
+    let mut global_depth: u32 = 0;
+    let mut cfg_open_depths: Vec<u32> = Vec::new();
+    let mut kani_open_depths: Vec<u32> = Vec::new();
+    // Block-comment carry-over: a `/* … */` that opens on one line
+    // and closes on a later line must skip every line in between.
+    let mut block_comment: bool = false;
 
-    for (idx, line) in content.lines().enumerate() {
-        let trimmed = line.trim_start();
+    for (idx, raw) in content.lines().enumerate() {
         let line_no = line_no_from_idx(idx);
-
-        let opens_braces = line_brace_delta(trimmed);
-        let entered_cfg_here = if is_cfg_attr_open(trimmed, &["test", "kani"]) {
-            if cfg_depth == 0 {
-                brace_depth_at_cfg_open = brace_depth_at_kani_open.saturating_add(0);
-            }
-            true
-        } else {
-            false
-        };
-        if entered_cfg_here {
-            cfg_depth = cfg_depth.saturating_add(1);
-            brace_depth_at_cfg_open = brace_depth_at_cfg_open.saturating_add(0);
+        // The SourceLine parser strips line/block comments and
+        // blanks string contents. We still operate on `raw` for
+        // brace tracking and panic-macro detection, but we use
+        // `parsed.is_non_code()` to detect lines that are entirely
+        // comments or strings (which the panic-macro check should
+        // not flag) and `parsed.code()` to look for the macros in
+        // rune form (so an `assert!` inside a string literal does
+        // not leak through).
+        let parsed = SourceLine::parse(raw, &mut block_comment);
+        if parsed.is_non_code() {
+            // Even all-comment lines can affect the global brace
+            // counter if they contain a stray `{` or `}` (which is
+            // rare but legal in a line-comment-adjacent character).
+            // Track braces in the raw line to keep the count honest.
+            global_depth = global_depth.saturating_add_signed(line_brace_delta(raw.trim_start()));
+            continue;
         }
-        let entered_kani_here = trimmed.starts_with("#[kani::proof]");
-        if entered_kani_here {
+        let trimmed = raw.trim_start();
+        let line_brace_delta_val = line_brace_delta(trimmed);
+        let opened_cfg_here = is_cfg_attr_open(trimmed, &["test", "kani"]);
+        let opened_kani_proof_here = !opened_cfg_here && trimmed.starts_with("#[kani::proof]");
+
+        if opened_cfg_here {
+            cfg_depth = cfg_depth.saturating_add(1);
+            // The cfg block's `{` will land on a later line; we treat
+            // the current global depth + 1 as the depth the matching
+            // `}` will eventually return us to.
+            cfg_open_depths.push(global_depth.saturating_add(1));
+        }
+        if opened_kani_proof_here {
             kani_proof_depth = kani_proof_depth.saturating_add(1);
-            brace_depth_at_kani_open = brace_depth_at_kani_open.saturating_add(0);
+            kani_open_depths.push(global_depth.saturating_add(1));
         }
 
         let inside_test_or_kani = cfg_depth > 0 || kani_proof_depth > 0;
-        if !inside_test_or_kani
-            && !is_comment(trimmed)
-            && let Some(macro_name) = first_panic_macro(trimmed)
-        {
+        if !inside_test_or_kani && let Some(macro_name) = first_panic_macro(parsed.code()) {
             report.push(Finding::new(
                 "PANIC-SURFACE-001",
                 display.clone(),
@@ -190,15 +209,27 @@ fn scan_file(root: &Path, path: &Path, report: &mut LaneReport) {
             ));
         }
 
-        // Track total brace depth so cfg/kani scopes close only when the
-        // OUTER brace (one matching the `mod tests {` / `#[kani::proof] fn`)
-        // closes, not every nested function body's closing brace.
-        brace_depth_at_cfg_open = brace_depth_at_cfg_open.saturating_add_signed(opens_braces);
-        brace_depth_at_kani_open = brace_depth_at_kani_open.saturating_add_signed(opens_braces);
-        if !entered_cfg_here && brace_depth_at_cfg_open == 0 && cfg_depth > 0 {
+        // Apply this line's brace delta to the global counter.
+        global_depth = global_depth.saturating_add_signed(line_brace_delta_val);
+
+        // Pop cfg/kani scopes whose synthetic open depth we have
+        // returned to. The snapshot is `global_depth_at_open + 1`, so
+        // the matching `{` (e.g. `mod tests {`) brings the global
+        // counter to the snapshot; the matching `}` brings it below.
+        // We close only on strict `<` so the cfg block's own `{` does
+        // not pop the scope prematurely.
+        if !opened_cfg_here
+            && let Some(&target) = cfg_open_depths.last()
+            && global_depth < target
+        {
+            cfg_open_depths.pop();
             cfg_depth = cfg_depth.saturating_sub(1);
         }
-        if !entered_kani_here && brace_depth_at_kani_open == 0 && kani_proof_depth > 0 {
+        if !opened_kani_proof_here
+            && let Some(&target) = kani_open_depths.last()
+            && global_depth < target
+        {
+            kani_open_depths.pop();
             kani_proof_depth = kani_proof_depth.saturating_sub(1);
         }
     }
@@ -250,9 +281,6 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-fn is_comment(line: &str) -> bool {
-    line.starts_with("//")
-}
 /// Convert a 0-indexed line offset into a 1-indexed `u32` line number,
 /// saturating at `u32::MAX` on overflow. Equivalent to
 /// `titania_lanes::helpers::line_no_from_idx` but kept local so the bin

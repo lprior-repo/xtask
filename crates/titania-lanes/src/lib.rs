@@ -30,8 +30,10 @@ use titania_core::{TargetProject, TargetProjectError, discover_target};
 
 pub mod command;
 pub mod helpers;
+pub mod source_line;
 
 pub use command::{CommandBudget, CommandIn, CommandOutput, EnvPolicy, LaneError, OutputStream};
+pub use source_line::SourceLine;
 
 /// Errors produced while resolving the target project from the process CWD.
 #[derive(Debug, Error)]

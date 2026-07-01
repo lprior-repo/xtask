@@ -31,9 +31,6 @@
 
 #[path = "forbidden_scan/lane.rs"]
 mod lane;
-#[path = "forbidden_scan/source_line.rs"]
-mod source_line;
-
 fn main() -> std::process::ExitCode {
     lane::main_exit(std::env::args().skip(1).collect())
 }
