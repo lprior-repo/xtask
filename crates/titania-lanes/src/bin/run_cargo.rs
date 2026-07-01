@@ -22,9 +22,9 @@ enum CargoLane {
 }
 
 impl CargoLane {
-    fn parse(raw: &str) -> Result<Self, String> {
+    fn parse(raw: &str) -> Result<Self, RunCargoError> {
         if raw.trim() != raw {
-            return Err(usage_message());
+            return Err(RunCargoError::Usage(usage_message()));
         }
         match raw {
             "fmt" => Ok(Self::Fmt),
@@ -32,7 +32,7 @@ impl CargoLane {
             "clippy" => Ok(Self::Clippy),
             "test" => Ok(Self::Test),
             "build" => Ok(Self::Build),
-            _other => Err(usage_message()),
+            _other => Err(RunCargoError::Usage(usage_message())),
         }
     }
 
@@ -90,7 +90,7 @@ fn run_checked(args: Vec<String>) -> Result<LaneReport, RunCargoError> {
     let mut rest = args.into_iter();
     let _program = rest.next();
     let subcommand = rest.next().ok_or_else(|| RunCargoError::Usage(usage_message()))?;
-    let lane = CargoLane::parse(&subcommand).map_err(RunCargoError::Usage)?;
+    let lane = CargoLane::parse(&subcommand)?;
     let extra_args: Vec<String> = rest.collect();
     let cwd = env::current_dir().map_err(RunCargoError::CurrentDir)?;
     let target = discover_target(&cwd).map_err(RunCargoError::Target)?;
