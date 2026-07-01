@@ -53,7 +53,7 @@ impl WorkspacePath {
     /// `WorkspacePath("src/foo.rs").starts_with("src") == true`).
     #[must_use]
     pub fn starts_with_segment(&self, segment: &str) -> bool {
-        self.0.split('/').next().map(|first| first == segment).unwrap_or(false)
+        self.0.split('/').next().is_some_and(|first| first == segment)
     }
 
     fn validate(s: &str) -> Result<(), WorkspacePathError> {
@@ -64,7 +64,7 @@ impl WorkspacePath {
             return Err(WorkspacePathError::LeadingSlash);
         }
         let bytes = s.as_bytes();
-        for &b in bytes.iter() {
+        for &b in bytes {
             if b == b'\\' {
                 return Err(WorkspacePathError::ContainsBackslash);
             }

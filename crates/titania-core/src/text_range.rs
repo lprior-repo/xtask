@@ -27,7 +27,7 @@ impl TextRange {
     ///
     /// # Errors
     /// [`TextRangeError::EndBeforeStart`] if `end < start`.
-    pub fn new(start_byte: u32, end_byte: u32) -> Result<Self, TextRangeError> {
+    pub const fn new(start_byte: u32, end_byte: u32) -> Result<Self, TextRangeError> {
         if end_byte < start_byte {
             return Err(TextRangeError::EndBeforeStart { start: start_byte, end: end_byte });
         }
@@ -70,7 +70,7 @@ impl TextRange {
 
     /// Whether this range and `other` share any byte position.
     #[must_use]
-    pub const fn overlaps(&self, other: &TextRange) -> bool {
+    pub const fn overlaps(&self, other: &Self) -> bool {
         self.start_byte < other.end_byte && other.start_byte < self.end_byte
     }
 }

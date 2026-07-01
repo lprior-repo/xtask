@@ -153,7 +153,7 @@ fn rule_id_rejects_lowercase_letter_at_each_position() {
             if ch.is_ascii_uppercase() {
                 let lower = ch.to_ascii_lowercase();
                 let mut s: Vec<u8> = base.as_bytes().to_vec();
-                s[pos..pos + 1].copy_from_slice(&[lower as u8]);
+                s[pos..=pos].copy_from_slice(&[lower as u8]);
                 let result = RuleId::new(std::str::from_utf8(&s).unwrap());
                 assert!(
                     matches!(result, Err(RuleIdError::NotUppercase(..))),

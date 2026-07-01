@@ -78,7 +78,7 @@ impl LaneDigest {
 
     /// Lane name.
     #[must_use]
-    pub fn lane(&self) -> &LaneName {
+    pub const fn lane(&self) -> &LaneName {
         &self.lane
     }
 

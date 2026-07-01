@@ -78,7 +78,7 @@ fn read_manifest_observation(
     })?;
     Ok(Some(ManifestObservation {
         root: root.to_path_buf(),
-        manifest: manifest.to_path_buf(),
+        manifest,
         status: manifest_status(&text),
     }))
 }

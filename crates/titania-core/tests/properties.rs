@@ -65,21 +65,18 @@ proptest! {
     #[test]
     fn rule_id_normalize_uppercases_input(s in "[a-zA-Z0-9_-]{1,64}") {
         let result = RuleId::normalize(&s);
-        match result {
-            Ok(id) => {
-                // All chars in the produced id must be uppercase ASCII or '_'.
-                for c in id.as_str().chars() {
-                    prop_assert!(
-                        matches!(c, 'A'..='Z' | '0'..='9' | '_'),
-                        "unexpected char {:?} in normalized {id}", c
-                    );
-                }
-                prop_assert!(id.as_str().contains('_'), "id {id} has no underscore");
+        if let Ok(id) = result {
+            // All chars in the produced id must be uppercase ASCII or '_'.
+            for c in id.as_str().chars() {
+                prop_assert!(
+                    matches!(c, 'A'..='Z' | '0'..='9' | '_'),
+                    "unexpected char {:?} in normalized {id}", c
+                );
             }
-            Err(_) => {
-                // Acceptable: every non-uppercase char was a non-`_` and
-                // was dropped, leaving no underscore. That's documented.
-            }
+            prop_assert!(id.as_str().contains('_'), "id {id} has no underscore");
+        } else {
+            // Acceptable: every non-uppercase char was a non-`_` and
+            // was dropped, leaving no underscore. That's documented.
         }
     }
 
