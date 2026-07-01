@@ -43,7 +43,6 @@ fn guard_zero_tests_reports_zero_applicable_tests_as_violations() -> TestResult 
     let workspace = fixture_workspace()?;
     let output = Command::new(env!("CARGO_BIN_EXE_guard-zero-tests"))
         .args([
-            "--",
             "/bin/sh",
             "-c",
             "printf 'running 0 tests\\n\\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s\\n'",
