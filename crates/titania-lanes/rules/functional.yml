@@ -1,0 +1,31 @@
+rules:
+  - id: FUNC_LOOPS_FOR
+    severity: error
+    pattern: 'for $PAT in $ITER { $$$BODY }'
+    message: 'replace imperative for loop with an iterator pipeline'
+    fix: 'Rewrite for item in iter { body } as iter.into_iter().map(...).collect() or fold(...).'
+  - id: FUNC_LOOPS_WHILE
+    severity: error
+    pattern: 'while $COND { $$$BODY }'
+    message: 'replace while loop with a bounded iterator/state transition'
+    fix: 'Parse a bounded range or state iterator, then use try_fold to return typed errors.'
+  - id: FUNC_LOOPS_LOOP
+    severity: error
+    pattern: 'loop { $$$BODY }'
+    message: 'replace unbounded loop with an explicit bounded transition'
+    fix: 'Use a named bounded iterator or std::iter::successors(...).take(MAX) with typed termination.'
+  - id: FUNC_PRINT_STDOUT
+    severity: error
+    pattern: 'println!($$$ARGS)'
+    message: 'library code must return structured output instead of printing stdout'
+    fix: 'Return a Finding/report value or write through an injected sink instead of println!.'
+  - id: FUNC_PRINT_STDERR
+    severity: error
+    pattern: 'eprintln!($$$ARGS)'
+    message: 'library code must return structured output instead of printing stderr'
+    fix: 'Return a typed error/finding and let the binary boundary render stderr.'
+  - id: FUNC_WILDCARD_IMPORT
+    severity: error
+    pattern: 'use $PATH::*;'
+    message: 'wildcard imports hide dependencies and defeat review'
+    fix: 'Replace the wildcard import with explicit imported names, e.g. use path::{Type, function};'

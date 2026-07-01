@@ -1,0 +1,21 @@
+rules:
+  - id: ARCHITECTURE_IMPORT_CORE_INFRA
+    severity: error
+    pattern: 'use $CRATE::$$$ITEMS;'
+    message: 'core/domain code must not import infrastructure crates'
+    fix: 'Move infrastructure use to an adapter/action boundary and pass typed values into core code.'
+  - id: ARCHITECTURE_IMPORT_FS
+    severity: error
+    pattern: 'use std::fs::$ITEM;'
+    message: 'core/domain code must not perform filesystem IO'
+    fix: 'Inject file contents or a filesystem capability at the action boundary.'
+  - id: ARCHITECTURE_IMPORT_TIME
+    severity: error
+    pattern: 'use std::time::$ITEM;'
+    message: 'core/domain code must not read wall-clock time'
+    fix: 'Pass a typed timestamp/clock value from the action boundary.'
+  - id: ARCHITECTURE_IMPORT_RANDOM
+    severity: error
+    pattern: 'use rand::$ITEM;'
+    message: 'core/domain code must not use ambient randomness'
+    fix: 'Pass deterministic entropy or a generated identifier from the action boundary.'

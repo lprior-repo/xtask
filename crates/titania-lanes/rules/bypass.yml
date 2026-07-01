@@ -1,0 +1,11 @@
+rules:
+  - id: BYPASS_ALLOW_ATTR
+    severity: error
+    pattern: '#[allow($$$LINTS)]'
+    message: 'lint suppression requires a strict-ai exception entry'
+    fix: 'Remove #[allow(...)]; if justified, add owner/reason/expiry/review to .titania/profiles/strict-ai/exceptions.toml.'
+  - id: BYPASS_EXPECT_ATTR
+    severity: error
+    pattern: '#[expect($$$LINTS)]'
+    message: 'expected lint suppression requires a strict-ai exception entry'
+    fix: 'Remove #[expect(...)]; if justified, add owner/reason/expiry/review to .titania/profiles/strict-ai/exceptions.toml.'
