@@ -112,7 +112,7 @@ fn scenario_completed_lane_receipt_records_resolved_target_root() -> TestResult 
     // When: a receipt is built for the completed lane.
     let target = discover_target(target_dir.path())?;
     let receipt = QualityReceipt::new(
-        target,
+        &target,
         ReceiptPeriod::new(1, 2)?,
         vec![LaneDigest::new(LaneName::new("fmt")?, ReceiptLaneExit::Clean, 1, 1, 0)?],
         ReceiptDigests::new(

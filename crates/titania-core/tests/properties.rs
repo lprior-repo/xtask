@@ -201,7 +201,7 @@ proptest! {
         let ra = TextRange::new(a_start, a_end).unwrap();
         let rb = TextRange::new(b_start, b_end).unwrap();
         let expected = a_start < b_end && b_start < a_end;
-        prop_assert_eq!(ra.overlaps(&rb), expected);
+        prop_assert_eq!(ra.overlaps(rb), expected);
     }
 
     #[test]

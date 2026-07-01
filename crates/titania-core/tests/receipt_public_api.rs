@@ -23,7 +23,7 @@ fn quality_receipt_public_api_round_trips_target_root_and_lane_results() -> Test
     let lane = LaneDigest::new(LaneName::new("cargo_fmt")?, ReceiptLaneExit::Clean, 4, 4, 0)?;
 
     let receipt = QualityReceipt::new(
-        target,
+        &target,
         ReceiptPeriod::new(100, 105)?,
         vec![lane],
         ReceiptDigests::new(
@@ -59,7 +59,7 @@ fn quality_receipt_public_api_rejects_legacy_schema() -> TestResult {
     let temp = tempfile::tempdir()?;
     let target = target_project(temp.path())?;
     let receipt = QualityReceipt::new(
-        target,
+        &target,
         ReceiptPeriod::new(100, 100)?,
         vec![],
         ReceiptDigests::new(
@@ -84,7 +84,7 @@ fn quality_receipt_public_api_rejects_future_schema() -> TestResult {
     let temp = tempfile::tempdir()?;
     let target = target_project(temp.path())?;
     let receipt = QualityReceipt::new(
-        target,
+        &target,
         ReceiptPeriod::new(100, 100)?,
         vec![],
         ReceiptDigests::new(

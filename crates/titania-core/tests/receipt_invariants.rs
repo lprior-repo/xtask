@@ -17,7 +17,7 @@ fn lane_digest() -> Result<LaneDigest, ReceiptError> {
 
 fn receipt(target: TargetProject) -> Result<QualityReceipt, ReceiptError> {
     QualityReceipt::new(
-        target,
+        &target,
         ReceiptPeriod::new(10, 12)?,
         vec![lane_digest()?],
         ReceiptDigests::new(

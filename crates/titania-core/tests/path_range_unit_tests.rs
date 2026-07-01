@@ -207,10 +207,10 @@ fn text_range_overlaps_distinct_cases() {
     let inside = TextRange::new(15, 18).unwrap();
     let disjoint = TextRange::new(0, 5).unwrap();
     let right_dup = TextRange::new(20, 30).unwrap();
-    assert!(!left.overlaps(&right_touch), "touching at endpoint shouldn't overlap");
-    assert!(left.overlaps(&inside));
-    assert!(!left.overlaps(&disjoint));
-    assert!(right_touch.overlaps(&right_dup));
+    assert!(!left.overlaps(right_touch), "touching at endpoint shouldn't overlap");
+    assert!(left.overlaps(inside));
+    assert!(!left.overlaps(disjoint));
+    assert!(right_touch.overlaps(right_dup));
 }
 
 #[test]
