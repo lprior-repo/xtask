@@ -95,5 +95,11 @@ $RECYCLE.BIN/
 *.log
 logs/
 
+
+# ----- Stray bench artifacts ------------------------------------
+/formal_setup_smoke
+/receipt_schema
+
 # ----- Tool caches (kept off the wire) -------------------------
 /.sccache/
+/.worktrees/
