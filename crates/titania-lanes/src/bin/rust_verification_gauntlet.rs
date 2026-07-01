@@ -91,11 +91,53 @@ struct TargetPackages {
     vb_runtime: PackagePresence,
 }
 
+/// Typed error taxonomy for [`TargetPackages::discover`].
+#[derive(Debug)]
+enum DiscoverError {
+    /// cargo metadata subprocess failed; carries the upstream LaneError from
+    /// `CommandIn::run_capture` already stringified through cargo_capture.
+    /// Will tighten to `LaneError` directly when commands.rs is migrated
+    CargoCapture { source: String },
+    /// `cargo metadata` stdout was not valid UTF-8 (LaneError upstream).
+    Utf8 { source: titania_lanes::LaneError },
+    /// `cargo metadata` output failed to parse as JSON.
+    Json { source: serde_json::Error },
+}
+
+impl std::fmt::Display for DiscoverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DiscoverError::CargoCapture { source } => {
+                write!(f, "cargo metadata subprocess failed: {source}")
+            }
+            DiscoverError::Utf8 { source } => {
+                write!(f, "cargo metadata output was not valid UTF-8: {source:?}")
+            }
+            DiscoverError::Json { source } => {
+                write!(f, "cargo metadata output failed to parse as JSON: {source}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DiscoverError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            // CargoCapture currently carries a String; no source.
+            DiscoverError::CargoCapture { source: _ } => None,
+            DiscoverError::Utf8 { source: _ } => None,
+            DiscoverError::Json { source } => Some(source),
+        }
+    }
+}
+
 impl TargetPackages {
-    fn discover(target: &TargetProject) -> Result<Self, String> {
-        let output = cargo_capture(target, &["metadata", "--format-version", "1", "--no-deps"])?;
-        let text = output.stdout_str().map_err(|error| error.to_string())?;
-        let metadata = serde_json::from_str::<Value>(text).map_err(|error| error.to_string())?;
+    fn discover(target: &TargetProject) -> Result<Self, DiscoverError> {
+        let output = cargo_capture(target, &["metadata", "--format-version", "1", "--no-deps"])
+            .map_err(|source| DiscoverError::CargoCapture { source })?;
+        let text = output.stdout_str().map_err(|source| DiscoverError::Utf8 { source })?;
+        let metadata =
+            serde_json::from_str::<Value>(text).map_err(|source| DiscoverError::Json { source })?;
         Ok(Self {
             vb_compile: package_presence(&metadata, "vb_compile"),
             vb_runtime: package_presence(&metadata, "vb_runtime"),
