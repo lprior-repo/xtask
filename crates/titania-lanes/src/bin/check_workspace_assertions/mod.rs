@@ -1,8 +1,6 @@
 mod checks;
 mod toml_scan;
 
-use std::path::Path;
-
 use titania_core::TargetProject;
 use titania_lanes::{Finding, LaneExit, LaneReport, current_target_project, exit};
 const RULE_INVALID_INVOCATION: &str = "WS-INVOCATION-001";
