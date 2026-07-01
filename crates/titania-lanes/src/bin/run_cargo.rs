@@ -58,6 +58,17 @@ impl CargoLane {
 }
 
 fn main() -> ExitCode {
+    // Stage 4 Pattern D: validate every RULE_* literal at startup.
+    if let Err((index, error)) = titania_core::RuleId::validate_many(&[
+        RULE_FMT,
+        RULE_COMPILE,
+        RULE_CLIPPY,
+        RULE_TEST,
+        RULE_BUILD,
+    ]) {
+        eprintln!("[run-cargo] invalid rule id at index {index}: {error}");
+        return ExitCode::FAILURE;
+    }
     exit(run(env::args().collect()))
 }
 
