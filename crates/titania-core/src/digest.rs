@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::error::DigestError;
 
 /// Number of hex characters in a hex-encoded 256-bit digest.
-pub(crate) const DIGEST_HEX_LEN: usize = 64;
+const DIGEST_HEX_LEN: usize = 64;
 
 /// A validated 64-character lowercase-hex content digest.
 ///

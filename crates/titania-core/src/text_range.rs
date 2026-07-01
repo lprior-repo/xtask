@@ -36,20 +36,20 @@ impl TextRange {
 
     /// Inclusive start byte position.
     #[must_use]
-    pub const fn start(&self) -> u32 {
+    pub const fn start(self) -> u32 {
         self.start_byte
     }
 
     /// Exclusive end byte position.
     #[must_use]
-    pub const fn end(&self) -> u32 {
+    pub const fn end(self) -> u32 {
         self.end_byte
     }
 
     /// Number of bytes covered. Always non-negative: `end - start` cannot
     /// underflow because the constructor rejects `end < start`.
     #[must_use]
-    pub const fn width(&self) -> u32 {
+    pub const fn width(self) -> u32 {
         // SAFETY: the constructor guarantees end >= start, so subtraction
         // never underflows. We use saturating_sub purely to satisfy
         // arithmetic-side-effect lint; the result equals `end - start`.
@@ -58,19 +58,19 @@ impl TextRange {
 
     /// Whether this range covers zero bytes.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub const fn is_empty(self) -> bool {
         self.start_byte == self.end_byte
     }
 
     /// Whether `byte` is in `[self.start, self.end)`.
     #[must_use]
-    pub const fn contains_byte(&self, byte: u32) -> bool {
+    pub const fn contains_byte(self, byte: u32) -> bool {
         byte >= self.start_byte && byte < self.end_byte
     }
 
     /// Whether this range and `other` share any byte position.
     #[must_use]
-    pub const fn overlaps(&self, other: &Self) -> bool {
+    pub const fn overlaps(self, other: Self) -> bool {
         self.start_byte < other.end_byte && other.start_byte < self.end_byte
     }
 }

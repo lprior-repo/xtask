@@ -93,10 +93,10 @@ fn metadata_or(
     path: &Utf8Path,
     missing: TargetProjectError,
 ) -> Result<std::fs::Metadata, TargetProjectError> {
-    std::fs::metadata(path.as_std_path()).map_err(|e| classify_io(e, path.as_str(), missing))
+    std::fs::metadata(path.as_std_path()).map_err(|e| classify_io(&e, path.as_str(), missing))
 }
 
-fn classify_io(e: std::io::Error, path: &str, missing: TargetProjectError) -> TargetProjectError {
+fn classify_io(e: &std::io::Error, path: &str, missing: TargetProjectError) -> TargetProjectError {
     if e.kind() == std::io::ErrorKind::NotFound {
         missing
     } else {

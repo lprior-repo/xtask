@@ -58,6 +58,10 @@ impl RuleId {
 
     /// Normalize input to a rule identifier: uppercase ASCII, drop illegal
     /// characters, then validate. Returns the same errors as [`RuleId::new`].
+    ///
+    /// # Errors
+    /// Returns [`RuleIdError`] when normalized input is empty, too long, lacks
+    /// an underscore, or contains no legal rule-id characters after filtering.
     pub fn normalize(s: &str) -> Result<Self, RuleIdError> {
         let mut buf = String::with_capacity(s.len());
         for ch in s.chars() {

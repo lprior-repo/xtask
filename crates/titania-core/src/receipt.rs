@@ -159,14 +159,14 @@ impl QualityReceipt {
     /// # Errors
     /// - [`ReceiptError::FinishedBeforeStarted`] if `finished_at < started_at`.
     pub fn new(
-        target_root: TargetProject,
+        target_root: &TargetProject,
         period: ReceiptPeriod,
         lane_results: Vec<LaneDigest>,
         digests: ReceiptDigests,
     ) -> Result<Self, ReceiptError> {
         Self::from_parts(
             RECEIPT_SCHEMA_VERSION,
-            RecordedTargetRoot::from_target_project(&target_root),
+            RecordedTargetRoot::from_target_project(target_root),
             period,
             lane_results,
             digests,
