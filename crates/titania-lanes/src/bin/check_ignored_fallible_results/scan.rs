@@ -3,56 +3,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use aho_corasick::AhoCorasick;
 use titania_lanes::{Finding, LaneReport, helpers::line_no_from_idx};
 
 use crate::source::SourceLine;
 
-/// Build the Aho-Corasick automaton over the file-level fallible-signal needles.
-///
-/// Returns `None` if the automaton cannot be constructed; callers fall back to
-/// the per-line slow path in that case (this crate never expects AC build to
-/// fail at runtime given the static needle set).
-pub(super) fn build_fallible_signal_ac() -> Option<AhoCorasick> {
-    AhoCorasick::builder()
-        .match_kind(aho_corasick::MatchKind::Standard)
-        .build(FALLIBLE_SIGNAL_NEEDLES)
-        .ok()
-}
-
-/// Fallible-signal needles used by the file-level AC prefilter. The per-line
-/// `contains_fallible_signal` check enforces the word-boundary + `(`-after
-/// rule; the AC prefilter is a fast first-pass that lets files lacking any of
-/// these substrings skip the per-line scan entirely. Keep this list aligned
-/// with the needles in `contains_fallible_signal` minus the trailing `(`.
-const FALLIBLE_SIGNAL_NEEDLES: &[&str] = &[
-    "fallible",
-    "try_",
-    "write_",
-    "send",
-    "recv",
-    "cancel",
-    "persist",
-    "commit",
-    "remove_",
-    "create_",
-    "open_",
-    "save_",
-    "read_to_",
-    "from_bytes",
-    "to_allocvec",
-    "try_from_parts",
-];
-
-pub(super) fn scan(
-    root: &Path,
-    ac: Option<&AhoCorasick>,
-    allow: &BTreeMap<String, String>,
-    report: &mut LaneReport,
-) {
-    scan_roots(root).iter().for_each(|file_root| {
-        scan_dir(file_root, root, ac, allow, report);
-    });
+pub(super) fn scan(root: &Path, allow: &BTreeMap<String, String>, report: &mut LaneReport) {
+    scan_roots(root).iter().for_each(|file_root| scan_dir(file_root, root, allow, report));
 }
 
 fn scan_roots(root: &Path) -> Vec<PathBuf> {
@@ -91,43 +47,35 @@ fn should_skip(rel: &str) -> bool {
         || rel.contains("/lifecycle_tests/")
 }
 
-fn scan_dir(
-    dir: &Path,
-    root: &Path,
-    ac: Option<&AhoCorasick>,
-    allow: &BTreeMap<String, String>,
-    report: &mut LaneReport,
-) {
+fn scan_dir(dir: &Path, root: &Path, allow: &BTreeMap<String, String>, report: &mut LaneReport) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
-    read.flatten().for_each(|entry| scan_entry(entry.path(), root, ac, allow, report));
+    read.flatten().for_each(|entry| scan_entry(entry.path(), root, allow, report));
 }
 
 fn scan_entry(
     path: PathBuf,
     root: &Path,
-    ac: Option<&AhoCorasick>,
     allow: &BTreeMap<String, String>,
     report: &mut LaneReport,
 ) {
     if path.is_dir() {
-        scan_dir(&path, root, ac, allow, report);
+        scan_dir(&path, root, allow, report);
     } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-        scan_rust_file(&path, root, ac, allow, report);
+        scan_rust_file(&path, root, allow, report);
     }
 }
 
 fn scan_rust_file(
     file: &Path,
     root: &Path,
-    ac: Option<&AhoCorasick>,
     allow: &BTreeMap<String, String>,
     report: &mut LaneReport,
 ) {
     let rel = rel_str(root, file);
     if !should_skip(&rel) {
-        scan_file(file, &rel, ac, allow, report);
+        scan_file(file, &rel, allow, report);
     }
 }
 
@@ -138,22 +86,10 @@ fn rel_str(root: &Path, path: &Path) -> String {
     }
 }
 
-fn scan_file(
-    file: &Path,
-    rel: &str,
-    ac: Option<&AhoCorasick>,
-    allow: &BTreeMap<String, String>,
-    report: &mut LaneReport,
-) {
+fn scan_file(file: &Path, rel: &str, allow: &BTreeMap<String, String>, report: &mut LaneReport) {
     let Ok(text) = std::fs::read_to_string(file) else {
         return;
     };
-    if let Some(automaton) = ac {
-        let has_signal = automaton.find_overlapping_iter(&text).next().is_some();
-        if !has_signal {
-            return;
-        }
-    }
     let mut block_comment = false;
     let mut context = ScanContext { rel, allow, report };
     text.lines().enumerate().for_each(|(idx, line)| {

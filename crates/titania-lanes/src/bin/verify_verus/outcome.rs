@@ -7,7 +7,7 @@ use super::{VerificationInputs, evidence, trust, verus_tool};
 
 const TRUST_FILE: &str = "trust-scan.txt";
 const FORBIDDEN_FILE: &str = "trust-forbidden.txt";
-pub(crate) const RULE_VERUS_TARGET: &str = "VERUS_TARGET_001";
+const RULE_VERUS_TARGET: &str = "VERUS-TARGET-001";
 
 pub(super) fn run_production_targets(
     report: &mut LaneReport,

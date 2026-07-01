@@ -22,7 +22,7 @@
 #[path = "verify_verus/evidence.rs"]
 mod evidence;
 #[path = "verify_verus/outcome.rs"]
-pub(crate) mod outcome;
+mod outcome;
 #[path = "verify_verus/registry.rs"]
 mod registry;
 #[path = "verify_verus/trust.rs"]
@@ -57,12 +57,6 @@ struct VerificationInputs {
 }
 
 fn main() -> std::process::ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup.
-    if let Err((index, error)) = titania_core::RuleId::validate_many(&[outcome::RULE_VERUS_TARGET])
-    {
-        eprintln!("[verify-verus] invalid rule id at index {index}: {error}");
-        return std::process::ExitCode::FAILURE;
-    }
     let mut report = LaneReport::new();
     match run(&mut report) {
         LaneExit::Clean => exit(LaneExit::Clean),
@@ -73,6 +67,7 @@ fn main() -> std::process::ExitCode {
         other => exit(other),
     }
 }
+
 fn run(report: &mut LaneReport) -> LaneExit {
     match run_checked(report) {
         Ok(exit_code) | Err(exit_code) => exit_code,

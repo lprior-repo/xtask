@@ -5,7 +5,7 @@ use titania_lanes::{Finding, LaneExit, LaneReport, current_target_project, exit}
 
 const SRC: TargetRelativePath =
     TargetRelativePath::new("crates/vb_core/src/proof_kernels/step_state.rs");
-pub(crate) const RULE_STEPSTATE: &str = "STEP_STATE";
+const RULE_STEPSTATE: &str = "STEPSTATE";
 
 type StateSet = BTreeSet<String>;
 

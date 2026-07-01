@@ -1,13 +1,13 @@
 use std::process::ExitCode;
 
+use serde_json::Value;
 use titania_core::TargetProject;
-use titania_lanes::{CommandIn, LaneError, LaneExit, current_target_project, exit};
+use titania_lanes::{CommandIn, LaneExit, current_target_project, exit};
 
 /// Sentinel model name that should never be valid. xtask prints the full
 /// "Available models:" listing as a side effect of any unknown --model.
 const SENTINEL: &str = "__loom_list_enumerate__";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum LaneOutcome {
     Models(Vec<String>),
     NotApplicable(String),
@@ -28,21 +28,22 @@ pub(crate) fn main_exit(args: Vec<String>) -> ExitCode {
 }
 
 fn usage_exit(args: &[String]) -> Option<ExitCode> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        eprintln!("usage: loom_list");
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        eprintln!("usage: loom_list\n  enumerates xtask loom models (PO-011)");
+        return Some(exit(LaneExit::Clean));
+    }
+    if !args.is_empty() {
+        eprintln!("usage: loom_list\n  no arguments allowed");
         return Some(exit(LaneExit::Usage));
     }
     None
 }
 
-fn render_lane_result(result: Result<LaneOutcome, LaneError>) -> ExitCode {
+fn render_lane_result(result: Result<LaneOutcome, String>) -> ExitCode {
     match result {
         Ok(LaneOutcome::Models(models)) => models_exit(&models),
         Ok(LaneOutcome::NotApplicable(reason)) => not_applicable_exit(&reason),
-        Err(err) => {
-            eprintln!("[loom-list] {err}");
-            exit(LaneExit::Violations)
-        }
+        Err(err) => violations_exit(&err),
     }
 }
 
@@ -57,9 +58,12 @@ fn not_applicable_exit(reason: &str) -> ExitCode {
     exit(LaneExit::NotApplicable)
 }
 
-/// Run the full lane: skip when there's no xtask, otherwise drive
-/// `cargo xtask loom --model <SENTINEL>` and classify the output.
-fn run_lane(target: &TargetProject) -> Result<LaneOutcome, LaneError> {
+fn violations_exit(err: &str) -> ExitCode {
+    eprintln!("[loom-list] {err}");
+    exit(LaneExit::Violations)
+}
+
+fn run_lane(target: &TargetProject) -> Result<LaneOutcome, String> {
     if !has_xtask_inventory(target) {
         return Ok(LaneOutcome::NotApplicable(
             "target project has no xtask loom inventory".to_owned(),
@@ -67,18 +71,19 @@ fn run_lane(target: &TargetProject) -> Result<LaneOutcome, LaneError> {
     }
     let output = run_xtask_loom(target)?;
     let combined = combined_output(&output.stdout, &output.stderr);
-    Ok(classify_loom_output(output.status.success(), &combined))
+    classify_loom_output(output.status.success(), &combined)
 }
 
 fn has_xtask_inventory(target: &TargetProject) -> bool {
     target.as_std_path().join("xtask/Cargo.toml").is_file()
 }
 
-fn run_xtask_loom(target: &TargetProject) -> Result<titania_lanes::CommandOutput, LaneError> {
-    let mut command = CommandIn::new(target, "cargo")?;
+fn run_xtask_loom(target: &TargetProject) -> Result<titania_lanes::CommandOutput, String> {
+    let mut command =
+        CommandIn::new(target, "cargo").map_err(|e| format!("failed to prepare cargo: {e}"))?;
     command.inherit_env();
     command.arg("xtask").arg("loom").arg("--model").arg(SENTINEL);
-    command.run_capture_raw()
+    command.run_capture_raw().map_err(|e| format!("failed to spawn cargo xtask loom: {e}"))
 }
 
 fn combined_output(stdout: &[u8], stderr: &[u8]) -> String {
@@ -87,73 +92,72 @@ fn combined_output(stdout: &[u8], stderr: &[u8]) -> String {
     format!("{stdout}{stderr}")
 }
 
-/// Classify the xtask output. Returns `LaneOutcome` (no `Result`) — every
-/// code path here either emits `NotApplicable` with a reason or `Models`
-/// with the discovered list; we never produce a hard `Err` from this
-/// function (subprocess failure is caught one level up in `run_xtask_loom`).
-fn classify_loom_output(sentinel_success: bool, combined: &str) -> LaneOutcome {
+fn classify_loom_output(sentinel_success: bool, combined: &str) -> Result<LaneOutcome, String> {
     if sentinel_success {
         eprintln!("[loom-list] WARNING: xtask exited 0 for sentinel model (unexpected)");
     }
     if combined.contains("no such command: `xtask`") {
-        return LaneOutcome::NotApplicable(
+        return Ok(LaneOutcome::NotApplicable(
             "cargo xtask command is absent for target project".to_owned(),
-        );
+        ));
     }
-    parse_models(combined).map_or_else(|| unparsed_inventory(combined), LaneOutcome::Models)
+    parse_models(combined)
+        .map_or_else(|| unparsed_inventory(combined), |models| Ok(LaneOutcome::Models(models)))
 }
 
-fn unparsed_inventory(combined: &str) -> LaneOutcome {
+fn unparsed_inventory(combined: &str) -> Result<LaneOutcome, String> {
     eprintln!("[loom-list] Raw output:\n{combined}");
-    LaneOutcome::NotApplicable("could not parse model inventory from xtask output".to_owned())
+    Ok(LaneOutcome::NotApplicable("could not parse model inventory from xtask output".to_owned()))
 }
 
 /// Parse the model list. Prefers the JSON array form
 /// (`Available models: ["name1", "name2"]`); falls back to indented list.
 fn parse_models(text: &str) -> Option<Vec<String>> {
-    parse_json_array(text).or_else(|| {
-        let names: Vec<String> = text.lines().filter_map(indented_model_token).collect();
-        non_empty_names(names)
-    })
+    if let Some(models) = parse_json_array(text) {
+        return Some(models);
+    }
+    parse_indented_list(text)
 }
 
 /// Try the JSON-array form: find the first line containing
 /// `Available models:` then parse the bracketed substring with `serde_json`.
 fn parse_json_array(text: &str) -> Option<Vec<String>> {
     let body = available_models_json_body(text)?;
-    let names: Vec<String> = serde_json::from_str::<Vec<String>>(body)
-        .ok()?
-        .into_iter()
-        .filter(|name| !name.is_empty())
-        .collect();
-    non_empty_names(names)
+    let value: Value = serde_json::from_str(body).ok()?;
+    let arr = value.as_array()?;
+    non_empty_names(arr.iter().filter_map(Value::as_str).map(str::to_owned).collect())
 }
 
 fn available_models_json_body(text: &str) -> Option<&str> {
-    let marker = "Available models:";
-    let line = text.lines().find(|line| line.contains(marker))?;
+    let line = text.lines().find(|l| l.contains("Available models:"))?;
     let start = line.find('[')?;
     let end = line.rfind(']')?;
-    if end <= start { None } else { line.get(start..=end.saturating_add(1)) }
+    if end <= start { None } else { line.get(start..=end) }
+}
+
+/// Fallback parser: walk each indented line, take the first whitespace-delimited
+/// token. Rejects obvious prose tokens (`Available`, `Error:`).
+fn parse_indented_list(text: &str) -> Option<Vec<String>> {
+    non_empty_names(text.lines().filter_map(indented_model_token).collect())
 }
 
 fn indented_model_token(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with("    ") && !trimmed.starts_with('\t') {
+    if !line.starts_with(char::is_whitespace) {
         return None;
     }
-    first_model_token(trimmed).map(str::to_owned)
+    let token = first_model_token(line.trim_start())?;
+    if is_valid_model_token(token) { Some(token.to_owned()) } else { None }
 }
 
 fn first_model_token(trimmed: &str) -> Option<&str> {
-    let token = trimmed.split_whitespace().next()?;
-    is_valid_model_token(token).then_some(token)
+    let token = trimmed.split(|c: char| c.is_whitespace() || c == '\u{2014}').next()?.trim();
+    if token.is_empty() { None } else { Some(token) }
 }
 
 fn is_valid_model_token(token: &str) -> bool {
-    !token.is_empty()
-        && !token.chars().any(|c| c == ':' || c == ',' || c == '`')
-        && !matches!(token, "Available" | "Error")
+    token != "Available"
+        && !token.starts_with("Error:")
+        && token.chars().all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
 }
 
 fn non_empty_names(names: Vec<String>) -> Option<Vec<String>> {

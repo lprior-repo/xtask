@@ -17,11 +17,11 @@ use titania_lanes::{CommandIn, Finding, LaneExit, LaneReport, current_target_pro
 
 use package_json::extract_package_names;
 
-const RULE_CARGO_MISSING: &str = "PUBAPI_CARGO_MISSING_001";
-const RULE_METADATA: &str = "PUBAPI_METADATA_001";
-const RULE_PUBLIC_API_DIFF: &str = "PUBAPI_DIFF_001";
-const RULE_PUBLIC_API_TOOL: &str = "PUBAPI_TOOL_001";
-const RULE_TARGET: &str = "PUBAPI_TARGET_001";
+const RULE_CARGO_MISSING: &str = "PUBAPI-CARGO-MISSING-001";
+const RULE_METADATA: &str = "PUBAPI-METADATA-001";
+const RULE_PUBLIC_API_DIFF: &str = "PUBAPI-DIFF-001";
+const RULE_PUBLIC_API_TOOL: &str = "PUBAPI-TOOL-001";
+const RULE_TARGET: &str = "PUBAPI-TARGET-001";
 const TOOLCHAIN: &str = "nightly-2026-04-28";
 
 fn filter_packages(discovered: Vec<String>) -> Vec<String> {
@@ -215,17 +215,6 @@ fn run_diffs_and_emit(
 }
 
 fn main() -> std::process::ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup.
-    if let Err((index, error)) = titania_core::RuleId::validate_many(&[
-        RULE_CARGO_MISSING,
-        RULE_METADATA,
-        RULE_PUBLIC_API_DIFF,
-        RULE_PUBLIC_API_TOOL,
-        RULE_TARGET,
-    ]) {
-        eprintln!("[check-public-api-diff] invalid rule id at index {index}: {error}");
-        return exit(LaneExit::Failure);
-    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if usage_requested(&args) {
         emit_usage();

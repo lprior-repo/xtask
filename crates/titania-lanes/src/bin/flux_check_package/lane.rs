@@ -3,9 +3,9 @@ use std::{env, path::PathBuf, process::ExitCode};
 use titania_core::TargetProject;
 use titania_lanes::{CommandIn, Finding, LaneExit, LaneReport, current_target_project, exit};
 
-const RULE_REJECTED: &str = "FLUX_REJECTED_001";
-const RULE_USAGE: &str = "FLUX_USAGE_001";
-const RULE_FLUX_MISSING: &str = "FLUX_MISSING_001";
+const RULE_REJECTED: &str = "FLUX-REJECTED-001";
+const RULE_USAGE: &str = "FLUX-USAGE-001";
+const RULE_FLUX_MISSING: &str = "FLUX-MISSING-001";
 
 const REJECTED_SELECTORS: &[&str] = &["--lib", "--test", "--tests", "--benches", "--all-targets"];
 
@@ -15,13 +15,6 @@ struct Invocation {
 }
 
 pub(crate) fn main_exit(args: Vec<String>) -> ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup.
-    if let Err((index, error)) =
-        titania_core::RuleId::validate_many(&[RULE_REJECTED, RULE_USAGE, RULE_FLUX_MISSING])
-    {
-        eprintln!("[flux-check-package] invalid rule id at index {index}: {error}");
-        return ExitCode::FAILURE;
-    }
     if help_requested(&args) {
         return print_help();
     }

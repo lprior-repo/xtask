@@ -51,7 +51,7 @@ where
 }
 
 fn assert_clean_fixture(target: &TargetProject) -> Result<(), String> {
-    match check(target, "HEAD", Vcs::Git).map_err(|e| e.to_string())? {
+    match check(target, "HEAD", Vcs::Git)? {
         0 => Ok(()),
         code => Err(format!("clean fixture returned {code}")),
     }
@@ -65,7 +65,7 @@ fn assert_untracked_ignored_fixture(target: &TargetProject) -> Result<(), String
         "#[test]\n#[ignore]\nfn covered_behavior() {\n    assert_eq!(2 + 2, 4);\n}\n",
     )
     .map_err(|error| format!("write untracked test failed: {error}"))?;
-    match check(target, "HEAD", Vcs::Git).map_err(|e| e.to_string())? {
+    match check(target, "HEAD", Vcs::Git)? {
         1 => Ok(()),
         code => Err(format!("untracked ignored fixture returned {code}")),
     }

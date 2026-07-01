@@ -1,4 +1,0 @@
-# hotpath-scan allowlist.
-#
-# Format (TBD by hotpath_scan.rs). Empty by default; add only with a
-# reviewed plan.

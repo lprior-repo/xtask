@@ -23,10 +23,6 @@ pub enum RuleIdError {
     NoUnderscore,
     #[error("rule id must be uppercase ASCII; bad character {0:?} at byte {1}")]
     NotUppercase(char, usize),
-    #[error("rule id exceeds max length {max}: got {len}")]
-    TooLong { len: usize, max: usize },
-    #[error("rule id contains invalid byte at index {index}")]
-    InvalidChar { index: usize },
 }
 
 /// Errors produced by [`crate::WorkspacePath::new`].

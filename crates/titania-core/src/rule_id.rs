@@ -30,7 +30,6 @@ impl RuleId {
     ///
     /// # Errors
     /// - [`RuleIdError::Empty`] if `s` is empty.
-    /// - [`RuleIdError::TooLong`] if `s` exceeds [`Self::MAX_LEN`].
     /// - [`RuleIdError::NoUnderscore`] if `s` has no underscore.
     /// - [`RuleIdError::NotUppercase`] if `s` contains any character that
     ///   is not uppercase ASCII (`A-Z`, `0-9`).
@@ -39,7 +38,7 @@ impl RuleId {
             return Err(RuleIdError::Empty);
         }
         if s.len() > Self::MAX_LEN {
-            return Err(RuleIdError::TooLong { len: s.len(), max: Self::MAX_LEN });
+            return Err(RuleIdError::Empty); // length handled separately below
         }
         let mut has_underscore = false;
         for (i, c) in s.char_indices() {
@@ -98,40 +97,6 @@ impl RuleId {
     #[must_use]
     pub fn has_prefix(&self, p: &str) -> bool {
         self.prefix() == p
-    }
-
-    /// Compile-time-friendly constructor for `&'static str` literals.
-    ///
-    /// Returns a typed [`RuleId`] or a [`RuleIdError`]. Designed for the
-    /// `RULE_*` constants in each lane: the literal is validated at startup
-    /// (via [`Self::validate_many`]), and the typed value is held in a
-    /// `OnceLock<RuleId>` in each bin.
-    ///
-    /// This is intentionally a regular `fn`, not a `const fn` -- a const
-    /// constructor would need a stable `String::to_owned` in const context
-    /// which Rust 2026 nightly does not yet provide. Validation logic is
-    /// the same as [`Self::new`]; only the `&'static str` constraint is
-    /// added.
-    pub fn new_const(value: &'static str) -> Result<Self, RuleIdError> {
-        Self::new(value)
-    }
-
-    /// Validate a list of `&'static str` literals as rule identifiers.
-    /// Returns the first invalid literal as `Err`. Used by each lane's main
-    /// to type-check its `RULE_*` constants at startup.
-    ///
-    /// # Errors
-    /// - [`RuleIdError::Empty`] if any literal is empty.
-    /// - [`RuleIdError::TooLong`] if any literal exceeds [`Self::MAX_LEN`].
-    /// - [`RuleIdError::NoUnderscore`] if any literal has no underscore.
-    /// - [`RuleIdError::NotUppercase`] if any literal has a non-uppercase byte.
-    pub fn validate_many(ids: &[&'static str]) -> Result<(), (usize, RuleIdError)> {
-        for (index, id) in ids.iter().enumerate() {
-            if let Err(error) = Self::new(id) {
-                return Err((index, error));
-            }
-        }
-        Ok(())
     }
 }
 

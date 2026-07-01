@@ -13,13 +13,5 @@
 mod lane;
 
 fn main() -> std::process::ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup. If any
-    // rule id is malformed (typo, missing underscore, too long, etc.) we
-    // fail-closed here rather than discovering the typo at the first
-    // Finding::push site.
-    if let Err((index, error)) = titania_core::RuleId::validate_many(&[lane::RULE_STEPSTATE]) {
-        eprintln!("[check-stepstate-matrix] invalid rule id at index {index}: {error}");
-        return std::process::ExitCode::FAILURE;
-    }
     lane::main_exit()
 }

@@ -60,8 +60,8 @@ import "list"
     required_error_tests: [
       "run-cargo with no subcommand returns LaneExit::Usage",
       "run-cargo with unknown subcommand `frobnicate` returns LaneExit::Usage with message listing valid subcommands",
-      "run-cargo fmt on a workspace with bad formatting returns LaneExit::Violations with at least one CARGO_FMT_001 finding",
-      "run-cargo clippy on a workspace with a clippy violation (e.g. an .unwrap() in a fixture) returns LaneExit::Violations with a CARGO_CLIPPY_001 finding",
+      "run-cargo fmt on a workspace with bad formatting returns LaneExit::Violations with at least one CARGO-FMT-001 finding",
+      "run-cargo clippy on a workspace with a clippy violation (e.g. an .unwrap() in a fixture) returns LaneExit::Violations with a CARGO-CLIPPY-001 finding",
     ]
   }
 

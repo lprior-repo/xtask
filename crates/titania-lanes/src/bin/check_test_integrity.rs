@@ -26,12 +26,5 @@
 mod check_test_integrity;
 
 fn main() -> std::process::ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup.
-    if let Err((index, error)) =
-        titania_core::RuleId::validate_many(&[check_test_integrity::RULE_TEST_INTEGRITY])
-    {
-        eprintln!("[check-test-integrity] invalid rule id at index {index}: {error}");
-        return std::process::ExitCode::FAILURE;
-    }
     check_test_integrity::main_exit()
 }

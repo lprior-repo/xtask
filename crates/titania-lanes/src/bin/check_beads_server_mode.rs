@@ -18,12 +18,12 @@ use titania_lanes::{Finding, LaneExit, LaneReport, exit};
 const METADATA_PATH: &str = ".beads/metadata.json";
 const EMBEDDED_MARKER: &str = ".beads/embeddeddolt";
 
-pub(crate) const RULE_BACKEND: &str = "BEADS_BACKEND_001";
-pub(crate) const RULE_DOLT_MODE: &str = "BEADS_MODE_001";
-pub(crate) const RULE_DOLT_PORT: &str = "BEADS_DOLT_PORT_001";
-pub(crate) const RULE_EMBEDDED_MARKER: &str = "BEADS_EMBEDDED_MARKER_001";
-pub(crate) const RULE_METADATA_MISSING: &str = "BEADS_METADATA_MISSING_001";
-pub(crate) const RULE_METADATA_PARSE: &str = "BEADS_METADATA_PARSE_001";
+const RULE_BACKEND: &str = "BEADS-BACKEND-001";
+const RULE_DOLT_MODE: &str = "BEADS-MODE-001";
+const RULE_DOLT_PORT: &str = "BEADS-DOLT-PORT-001";
+const RULE_EMBEDDED_MARKER: &str = "BEADS-EMBEDDED-MARKER-001";
+const RULE_METADATA_MISSING: &str = "BEADS-METADATA-MISSING-001";
+const RULE_METADATA_PARSE: &str = "BEADS-METADATA-PARSE-001";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
@@ -156,18 +156,6 @@ fn check_metadata(text: &str, report: &mut LaneReport) -> Option<BeadsMetadata> 
 }
 
 fn main() -> std::process::ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup.
-    if let Err((index, error)) = titania_core::RuleId::validate_many(&[
-        RULE_BACKEND,
-        RULE_DOLT_MODE,
-        RULE_DOLT_PORT,
-        RULE_EMBEDDED_MARKER,
-        RULE_METADATA_MISSING,
-        RULE_METADATA_PARSE,
-    ]) {
-        eprintln!("[check-beads-server-mode] invalid rule id at index {index}: {error}");
-        return std::process::ExitCode::FAILURE;
-    }
     let mut report = LaneReport::new();
 
     let metadata = match fs::read_to_string(METADATA_PATH) {

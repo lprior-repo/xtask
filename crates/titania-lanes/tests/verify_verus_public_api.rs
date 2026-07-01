@@ -113,7 +113,7 @@ fn verify_verus_failed_target_returns_violation_and_failure_summary() -> TestRes
     let summary = fs::read_to_string(target.path().join(".evidence/verus/summary.txt"))?;
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("VERUS_TARGET_001"));
+    assert!(stderr.contains("VERUS-TARGET-001"));
     assert!(
         stderr.contains("fake verifier failure")
             || stderr.contains("verification/verus/failing.rs")

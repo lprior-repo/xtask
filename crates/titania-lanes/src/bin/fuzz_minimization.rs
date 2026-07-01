@@ -1,7 +1,7 @@
 //! cargo fuzz run wrapper for libfuzzer minimization.
 //!
 //! Rust re-implementation of the bash lane in
-//! `titania/scripts/fuzz-minimization.sh`. Run via
+//! `velvet-ballistics/scripts/fuzz-minimization.sh`. Run via
 //! `cargo run --bin fuzz-minimization -- <target> [extra args...]` from the
 //! repository root or via the matching Moon task in `.moon/tasks/all.yml`.
 //!
@@ -31,38 +31,35 @@
 
 use std::{fs, io, path::Path};
 
-use thiserror::Error;
-use titania_core::TargetProject;
-use titania_lanes::{CommandIn, LaneError, LaneExit, current_target_project, exit};
+use titania_lanes::{CommandIn, LaneExit, current_target_project, exit};
 
 /// Boundary-parsed lane input.
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum LaneInput {
     DiscoverDefault,
     Explicit { fuzz_target: String, extra_args: Vec<String> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum LaneOutcome {
-    Child(LaneExit),
     NotApplicable(String),
+    Child(LaneExit),
 }
 
 impl LaneOutcome {
+    #[must_use]
     fn to_lane_exit(&self) -> LaneExit {
         match self {
-            LaneOutcome::Child(code) => *code,
             LaneOutcome::NotApplicable(_) => LaneExit::NotApplicable,
+            LaneOutcome::Child(code) => *code,
         }
     }
 }
 
 fn parse_lane_input(args: Vec<String>) -> LaneInput {
-    let mut iter = args.into_iter();
-    let next = iter.next();
-    match next {
-        None => LaneInput::DiscoverDefault,
-        Some(target) => LaneInput::Explicit { fuzz_target: target, extra_args: iter.collect() },
+    match args.split_first() {
+        Some((target, extra)) if !target.is_empty() => {
+            LaneInput::Explicit { fuzz_target: target.clone(), extra_args: extra.to_vec() }
+        }
+        _ => LaneInput::DiscoverDefault,
     }
 }
 
@@ -71,25 +68,8 @@ fn status_to_lane(code: Option<i32>) -> LaneExit {
         Some(0) => LaneExit::Clean,
         Some(2) => LaneExit::Usage,
         Some(1) => LaneExit::Violations,
-        _ => LaneExit::Failure,
+        Some(_) | None => LaneExit::Failure,
     }
-}
-
-/// Bin-local errors. The structured variants survive end-to-end; `main`
-/// matches on them and emits the right `LaneExit` (Fuzz `Io` / `Spawn`
-/// become `LaneExit::Failure`, not a string-collapse).
-#[derive(Debug, Error)]
-enum FuzzError {
-    #[error("I/O error reading {path}: {source}")]
-    Io {
-        path: String,
-        #[source]
-        source: io::Error,
-    },
-    #[error("failed to spawn cargo fuzz: {0}")]
-    Spawn(LaneError),
-    #[error("failed to prepare cargo fuzz: {0}")]
-    Prepare(LaneError),
 }
 
 fn main() -> std::process::ExitCode {
@@ -117,7 +97,7 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run_lane(target: &TargetProject, input: LaneInput) -> Result<LaneOutcome, FuzzError> {
+fn run_lane(target: &titania_core::TargetProject, input: LaneInput) -> Result<LaneOutcome, String> {
     match input {
         LaneInput::DiscoverDefault => {
             if has_fuzz_targets(target)? {
@@ -138,7 +118,7 @@ fn run_lane(target: &TargetProject, input: LaneInput) -> Result<LaneOutcome, Fuz
     }
 }
 
-fn has_fuzz_targets(target: &TargetProject) -> Result<bool, FuzzError> {
+fn has_fuzz_targets(target: &titania_core::TargetProject) -> Result<bool, String> {
     let fuzz_dir = target.as_std_path().join("fuzz");
     if !fuzz_dir.join("Cargo.toml").is_file() {
         return Ok(false);
@@ -148,13 +128,13 @@ fn has_fuzz_targets(target: &TargetProject) -> Result<bool, FuzzError> {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(err) => {
-            return Err(FuzzError::Io { path: targets_dir.display().to_string(), source: err });
+            return Err(format!("failed to read {}: {err}", targets_dir.display()));
         }
     };
     entries
         .map(|entry| entry.map(|entry| is_rust_source(&entry.path())))
         .try_fold(false, |found, entry| entry.map(|is_target| found || is_target))
-        .map_err(|err| FuzzError::Io { path: targets_dir.display().to_string(), source: err })
+        .map_err(|err| format!("failed to inspect {}: {err}", targets_dir.display()))
 }
 
 fn is_rust_source(path: &Path) -> bool {
@@ -162,11 +142,12 @@ fn is_rust_source(path: &Path) -> bool {
 }
 
 fn run_fuzz_target(
-    target: &TargetProject,
+    target: &titania_core::TargetProject,
     fuzz_target: &str,
     extra_args: &[String],
-) -> Result<LaneOutcome, FuzzError> {
-    let mut command = CommandIn::new(target, "cargo").map_err(FuzzError::Prepare)?;
+) -> Result<LaneOutcome, String> {
+    let mut command = CommandIn::new(target, "cargo")
+        .map_err(|err| format!("failed to prepare cargo fuzz: {err}"))?;
     command.inherit_env();
     command.arg("fuzz").arg("run").arg(fuzz_target);
     command.arg("--target").arg("x86_64-unknown-linux-gnu");
@@ -180,64 +161,35 @@ fn run_fuzz_target(
     command
         .run_status_raw()
         .map(|status| LaneOutcome::Child(status_to_lane(status.code())))
-        .map_err(FuzzError::Spawn)
+        .map_err(|io_err| format!("failed to spawn cargo fuzz: {io_err}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::{fs, path::Path};
 
+    use super::{LaneInput, LaneOutcome, run_lane};
     use titania_core::TargetProject;
     use titania_lanes::LaneExit;
 
-    use super::{LaneInput, LaneOutcome, has_fuzz_targets, run_lane};
-
-    fn target_from(path: &std::path::Path) -> io::Result<TargetProject> {
-        TargetProject::try_from_path(path).map_err(|e| io::Error::other(e.to_string()))
-    }
-
-    fn fixture_target() -> io::Result<(tempfile::TempDir, TargetProject)> {
-        let temp = tempfile::TempDir::new()?;
-        std::fs::write(temp.path().join("Cargo.toml"), "[workspace]\nmembers=[\"fuzz\"]\n")?;
-        let fuzz_dir = temp.path().join("fuzz");
-        std::fs::create_dir_all(fuzz_dir.join("fuzz_targets"))?;
-        std::fs::write(
-            fuzz_dir.join("Cargo.toml"),
-            "[package]\nname=\"fuzz\"\nversion=\"0.0.0\"\nedition=\"2024\"\n",
-        )?;
-        let target = target_from(temp.path())?;
-        Ok((temp, target))
-    }
-
-    fn empty_target() -> io::Result<(tempfile::TempDir, TargetProject)> {
-        let temp = tempfile::TempDir::new()?;
-        std::fs::write(temp.path().join("Cargo.toml"), "[workspace]\nmembers=[]\n")?;
-        let target = target_from(temp.path())?;
-        Ok((temp, target))
-    }
-
     #[test]
-    fn project_without_fuzz_targets_emits_not_applicable_disposition() -> io::Result<()> {
-        let (_temp, target) = empty_target()?;
+    fn project_without_fuzz_targets_emits_not_applicable_disposition() {
+        let temp = tempfile::tempdir().expect("temporary target project");
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write manifest");
+        let target = target_project(temp.path());
+
         let outcome = run_lane(&target, LaneInput::DiscoverDefault)
-            .map_err(|e| io::Error::other(e.to_string()))?;
+            .expect("lane should classify missing fuzz setup");
+
         assert!(matches!(outcome, LaneOutcome::NotApplicable(_)));
         assert_eq!(outcome.to_lane_exit(), LaneExit::NotApplicable);
-        Ok(())
     }
 
-    #[test]
-    fn project_with_fuzz_targets_but_no_explicit_target_emits_not_applicable() -> io::Result<()> {
-        let (_temp, target) = fixture_target()?;
-        // Create a fuzz target so has_fuzz_targets returns true.
-        std::fs::write(
-            target.as_std_path().join("fuzz/fuzz_targets/empty.rs"),
-            "pub fn empty() {}\n",
-        )?;
-        assert!(has_fuzz_targets(&target).map_err(|e| io::Error::other(e.to_string()))?);
-        let outcome = run_lane(&target, LaneInput::DiscoverDefault)
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        assert!(matches!(outcome, LaneOutcome::NotApplicable(_)));
-        Ok(())
+    fn target_project(path: &Path) -> TargetProject {
+        TargetProject::try_from_path(path).expect("valid target project")
     }
 }

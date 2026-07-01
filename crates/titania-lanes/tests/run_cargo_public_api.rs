@@ -92,7 +92,7 @@ fn run_cargo_fmt_bad_project_reports_diff_hunk() -> TestResult {
     let output = run_cargo(temp.path(), &["fmt"])?;
     let stderr = stderr_text(&output)?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_FMT_001"));
+    assert!(stderr.contains("CARGO-FMT-001"));
     assert!(stderr.contains("rustfmt diff hunk"));
     Ok(())
 }
@@ -122,7 +122,7 @@ fn run_cargo_clippy_bad_project_reports_diagnostic() -> TestResult {
     let output = run_cargo(temp.path(), &["clippy"])?;
     let stderr = stderr_text(&output)?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_CLIPPY_001"));
+    assert!(stderr.contains("CARGO-CLIPPY-001"));
     assert!(stderr.contains("needless_bool") || stderr.contains("bool"));
     Ok(())
 }
@@ -143,7 +143,7 @@ fn run_cargo_clippy_checks_examples() -> TestResult {
     let output = run_cargo(temp.path(), &["clippy"])?;
     let stderr = stderr_text(&output)?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_CLIPPY_001"));
+    assert!(stderr.contains("CARGO-CLIPPY-001"));
     assert!(stderr.contains("mismatched types"));
     Ok(())
 }
@@ -173,7 +173,7 @@ fn run_cargo_compile_bad_project_reports_diagnostic() -> TestResult {
     let output = run_cargo(temp.path(), &["compile"])?;
     let stderr = stderr_text(&output)?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_COMPILE_001"));
+    assert!(stderr.contains("CARGO-COMPILE-001"));
     assert!(stderr.contains("mismatched types"));
     Ok(())
 }
@@ -194,7 +194,7 @@ fn run_cargo_compile_checks_integration_tests() -> TestResult {
     let output = run_cargo(temp.path(), &["compile"])?;
     let stderr = stderr_text(&output)?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_COMPILE_001"));
+    assert!(stderr.contains("CARGO-COMPILE-001"));
     assert!(stderr.contains("mismatched types"));
     Ok(())
 }
@@ -224,7 +224,7 @@ fn run_cargo_test_bad_project_reports_failed_test() -> TestResult {
     let output = run_cargo(temp.path(), &["test"])?;
     let stderr = stderr_text(&output)?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_TEST_001"));
+    assert!(stderr.contains("CARGO-TEST-001"));
     assert!(stderr.contains("test failed: tests::fails"));
     Ok(())
 }
@@ -241,7 +241,7 @@ fn run_cargo_test_checks_all_features() -> TestResult {
     let output = run_cargo(temp.path(), &["test"])?;
     let stderr = stderr_text(&output)?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_TEST_001"));
+    assert!(stderr.contains("CARGO-TEST-001"));
     assert!(stderr.contains("test failed: tests::fails_when_feature_enabled"));
     Ok(())
 }
@@ -271,7 +271,7 @@ fn run_cargo_build_bad_project_reports_diagnostic() -> TestResult {
     let output = run_cargo(temp.path(), &["build"])?;
     let stderr = stderr_text(&output)?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_BUILD_001"));
+    assert!(stderr.contains("CARGO-BUILD-001"));
     assert!(stderr.contains("mismatched types"));
     Ok(())
 }

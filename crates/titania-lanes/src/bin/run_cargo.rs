@@ -6,11 +6,11 @@ use serde_json::Value;
 use titania_core::{TargetProject, TargetProjectError, discover_target};
 use titania_lanes::{CommandIn, Finding, LaneError, LaneExit, LaneReport, exit};
 
-const RULE_FMT: &str = "CARGO_FMT_001";
-const RULE_COMPILE: &str = "CARGO_COMPILE_001";
-const RULE_CLIPPY: &str = "CARGO_CLIPPY_001";
-const RULE_TEST: &str = "CARGO_TEST_001";
-const RULE_BUILD: &str = "CARGO_BUILD_001";
+const RULE_FMT: &str = "CARGO-FMT-001";
+const RULE_COMPILE: &str = "CARGO-COMPILE-001";
+const RULE_CLIPPY: &str = "CARGO-CLIPPY-001";
+const RULE_TEST: &str = "CARGO-TEST-001";
+const RULE_BUILD: &str = "CARGO-BUILD-001";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CargoLane {
@@ -22,9 +22,9 @@ enum CargoLane {
 }
 
 impl CargoLane {
-    fn parse(raw: &str) -> Result<Self, RunCargoError> {
+    fn parse(raw: &str) -> Result<Self, String> {
         if raw.trim() != raw {
-            return Err(RunCargoError::Usage(usage_message()));
+            return Err(usage_message());
         }
         match raw {
             "fmt" => Ok(Self::Fmt),
@@ -32,7 +32,7 @@ impl CargoLane {
             "clippy" => Ok(Self::Clippy),
             "test" => Ok(Self::Test),
             "build" => Ok(Self::Build),
-            _other => Err(RunCargoError::Usage(usage_message())),
+            _other => Err(usage_message()),
         }
     }
 
@@ -58,17 +58,6 @@ impl CargoLane {
 }
 
 fn main() -> ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup.
-    if let Err((index, error)) = titania_core::RuleId::validate_many(&[
-        RULE_FMT,
-        RULE_COMPILE,
-        RULE_CLIPPY,
-        RULE_TEST,
-        RULE_BUILD,
-    ]) {
-        eprintln!("[run-cargo] invalid rule id at index {index}: {error}");
-        return ExitCode::FAILURE;
-    }
     exit(run(env::args().collect()))
 }
 
@@ -101,7 +90,7 @@ fn run_checked(args: Vec<String>) -> Result<LaneReport, RunCargoError> {
     let mut rest = args.into_iter();
     let _program = rest.next();
     let subcommand = rest.next().ok_or_else(|| RunCargoError::Usage(usage_message()))?;
-    let lane = CargoLane::parse(&subcommand)?;
+    let lane = CargoLane::parse(&subcommand).map_err(RunCargoError::Usage)?;
     let extra_args: Vec<String> = rest.collect();
     let cwd = env::current_dir().map_err(RunCargoError::CurrentDir)?;
     let target = discover_target(&cwd).map_err(RunCargoError::Target)?;
@@ -133,11 +122,12 @@ fn cargo_output(
     lane: CargoLane,
     extra_args: &[String],
 ) -> Result<titania_lanes::CommandOutput, LaneError> {
+    let manifest = target.manifest_path();
     let mut command = CommandIn::new(target, "cargo")?;
     command.inherit_env();
     match lane {
         CargoLane::Fmt => {
-            command.arg("fmt").arg("--check");
+            command.arg("fmt").arg("--check").arg("--manifest-path").arg(manifest.as_str());
         }
         CargoLane::Compile => {
             command.arg("check").arg("--workspace").arg("--all-targets").arg("--frozen");

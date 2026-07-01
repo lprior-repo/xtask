@@ -282,26 +282,6 @@ fn is_non_empty(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|m| m.len() > 0)
 }
 
-/// Error emitted when the produced kani-list JSON cannot be parsed.
-#[derive(Debug)]
-enum JsonValidationError {
-    Parse(serde_json::Error),
-}
-
-impl std::fmt::Display for JsonValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let JsonValidationError::Parse(error) = self;
-        write!(f, "invalid JSON: {error}")
-    }
-}
-
-impl std::error::Error for JsonValidationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        let JsonValidationError::Parse(error) = self;
-        Some(error)
-    }
-}
-
-fn validate_json(raw: &str) -> Result<(), JsonValidationError> {
-    serde_json::from_str::<Value>(raw).map(|_| ()).map_err(JsonValidationError::Parse)
+fn validate_json(raw: &str) -> Result<(), String> {
+    serde_json::from_str::<Value>(raw).map(|_| ()).map_err(|e| e.to_string())
 }

@@ -29,9 +29,9 @@ use std::process::ExitCode;
 use model::{FindingData, HOT_CRATES};
 use titania_lanes::{Finding, LaneExit, LaneReport, current_target_project, exit};
 
-pub(crate) const RULE_INVALID_INVOCATION: &str = "HC_INVOCATION_001";
-pub(crate) const RULE_VIOLATION: &str = "HC_VIOLATION_001";
-pub(crate) const RULE_FIXTURE: &str = "HC_FIXTURE_001";
+const RULE_INVALID_INVOCATION: &str = "HC-INVOCATION-001";
+const RULE_VIOLATION: &str = "HC-VIOLATION-001";
+const RULE_FIXTURE: &str = "HC-FIXTURE-001";
 
 fn push_finding(report: &mut LaneReport, finding: &FindingData, rule: &'static str) {
     report.push(Finding::new(
@@ -62,9 +62,9 @@ fn usage_error(error: impl std::fmt::Display) -> ExitCode {
     exit(LaneExit::Usage)
 }
 
-fn fixture_error(error: impl std::fmt::Display) -> ExitCode {
+fn fixture_error(error: String) -> ExitCode {
     let mut report = LaneReport::new();
-    report.push(Finding::new(RULE_FIXTURE, ".", 0, error.to_string()));
+    report.push(Finding::new(RULE_FIXTURE, ".", 0, error));
     eprint!("{}", report.render());
     exit(LaneExit::Failure)
 }
@@ -114,15 +114,6 @@ fn run_lane() -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup.
-    if let Err((index, error)) = titania_core::RuleId::validate_many(&[
-        RULE_INVALID_INVOCATION,
-        RULE_VIOLATION,
-        RULE_FIXTURE,
-    ]) {
-        eprintln!("[check-hot-cold-forbidden-apis] invalid rule id at index {index}: {error}");
-        return exit(LaneExit::Failure);
-    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_help();

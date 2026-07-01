@@ -25,9 +25,9 @@
 #![deny(clippy::panic)]
 #![forbid(unsafe_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use titania_lanes::{Finding, LaneExit, LaneReport, current_target_project, exit};
+use titania_lanes::{Finding, LaneExit, LaneReport, exit};
 
 /// Stable features allowed in any scope.
 const NORMAL_ALLOWED: &[&str] = &["try_blocks", "portable_simd"];
@@ -50,19 +50,8 @@ const EXCLUDED_GLOBS: &[&str] = &[
 ];
 
 fn main() -> std::process::ExitCode {
-    let target = match current_target_project() {
-        Ok(target) => target,
-        Err(error) => {
-            eprintln!("[check-nightly-features] target discovery failed: {error}");
-            return exit(LaneExit::Failure);
-        }
-    };
-
     let mut report = LaneReport::new();
-    for file in titania_lanes::walk::production_rust_files_par(target.as_std_path()) {
-        if is_excluded_path(&file) {
-            continue;
-        }
+    for file in collect_source_files() {
         scan_file(&file, &mut report);
     }
 
@@ -75,12 +64,29 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-/// True if the file path contains any of the lane-specific exclusion
-/// glob fragments. Applied at the call site so the shared walker
-/// stays scope-agnostic.
-fn is_excluded_path(path: &Path) -> bool {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    EXCLUDED_GLOBS.iter().any(|g| normalized.contains(g))
+fn collect_source_files() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    walk(Path::new("."), &mut out);
+    out.sort();
+    out
+}
+
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        if EXCLUDED_GLOBS.iter().any(|g| normalized.contains(g)) {
+            continue;
+        }
+        if path.is_dir() {
+            walk(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
 }
 
 fn scan_file(path: &Path, report: &mut LaneReport) {

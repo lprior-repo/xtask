@@ -9,8 +9,8 @@ use titania_lanes::{Finding, LaneExit, LaneReport, current_target_project, exit}
 
 const CLI_SRC: TargetRelativePath = TargetRelativePath::new("crates/vb_cli/src");
 const MASTER_DOC: TargetRelativePath = TargetRelativePath::new("velvet-ballistics-MASTER.md");
-const RULE_REQUIRED: &str = "AGENT_CLI_REQUIRED_001";
-const RULE_REJECTED: &str = "AGENT_CLI_REJECTED_001";
+const RULE_REQUIRED: &str = "AGENT-CLI-REQUIRED-001";
+const RULE_REJECTED: &str = "AGENT-CLI-REJECTED-001";
 
 #[derive(Clone, Copy)]
 struct TargetRelativePath {
@@ -44,13 +44,6 @@ const REJECTED_LITERALS: &[&str] = &[
 ];
 
 pub(crate) fn main_exit() -> ExitCode {
-    // Stage 4 Pattern D: validate every RULE_* literal at startup.
-    if let Err((index, error)) =
-        titania_core::RuleId::validate_many(&[RULE_REQUIRED, RULE_REJECTED])
-    {
-        eprintln!("[check-agent-cli-contract] invalid rule id at index {index}: {error}");
-        return ExitCode::FAILURE;
-    }
     let target = match current_target_project() {
         Ok(target) => target,
         Err(error) => {

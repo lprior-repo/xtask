@@ -10,46 +10,11 @@ use crate::{
     syntax::{ApiSourceLine, compact, remove_spaces},
 };
 
-/// Typed error taxonomy for the hot/cold forbidden-API scanner.
-#[derive(Debug)]
-pub(super) enum HotFileError {
-    LoadAllow { source: String },
-    HotSourceWalk { source: io::Error },
-    Unreadable { path: PathBuf, source: io::Error },
-}
-
-impl std::fmt::Display for HotFileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HotFileError::LoadAllow { source } => write!(f, "allow-file load failed: {source}"),
-            HotFileError::HotSourceWalk { source } => {
-                write!(f, "hot source scan failed: {source}")
-            }
-            HotFileError::Unreadable { path, source } => {
-                write!(f, "{}: unreadable: {source}", path.display())
-            }
-        }
-    }
-}
-
-impl std::error::Error for HotFileError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // LoadAllow carries a String (load_allow_file returns Result<_, String>).
-        // String does not implement std::error::Error, so this variant chains
-        // to nothing. The other two variants wrap io::Error, which does.
-        match self {
-            HotFileError::LoadAllow { source: _ } => None,
-            HotFileError::HotSourceWalk { source } => Some(source),
-            HotFileError::Unreadable { source, .. } => Some(source),
-        }
-    }
-}
-
 pub(super) fn scan(
     root: &Path,
-) -> Result<(Vec<String>, Vec<FindingData>, Vec<FindingData>), HotFileError> {
-    let allowed = load_allow_file(root).map_err(|source| HotFileError::LoadAllow { source })?;
-    let sources = hot_sources(root).map_err(|source| HotFileError::HotSourceWalk { source })?;
+) -> Result<(Vec<String>, Vec<FindingData>, Vec<FindingData>), String> {
+    let allowed = load_allow_file(root)?;
+    let sources = hot_sources(root).map_err(|error| format!("hot source scan failed: {error}"))?;
     let mut state = ScanState::new(allowed);
     sources.iter().try_for_each(|source| state.scan_source(root, source))?;
     Ok(state.finish())
@@ -71,17 +36,15 @@ impl ScanState {
         (self.classified, self.violations, self.justified)
     }
 
-    fn scan_source(&mut self, root: &Path, source: &Path) -> Result<(), HotFileError> {
+    fn scan_source(&mut self, root: &Path, source: &Path) -> Result<(), String> {
         let rel_path = relative_path(root, source);
         let role = source_role(&rel_path);
         self.classified.push(format!("ClassifiedPath|{:?}|{}", role, rel_path));
         if role != SourceRole::HotProduction {
             return Ok(());
         }
-        let text = fs::read_to_string(source).map_err(|io_error| HotFileError::Unreadable {
-            path: source.to_path_buf(),
-            source: io_error,
-        })?;
+        let text = fs::read_to_string(source)
+            .map_err(|error| format!("{}: unreadable: {error}", source.display()))?;
         self.scan_hot_text(&rel_path, &text);
         Ok(())
     }

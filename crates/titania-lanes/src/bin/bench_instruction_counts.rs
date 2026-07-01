@@ -1,7 +1,7 @@
 //! perf-stat-driven instruction-count benchmark runner with evidence dir.
 //!
 //! Rust re-implementation of the bash lane in
-//! `titania/scripts/bench-instruction-counts.sh`. Run via
+//! `velvet-ballistics/scripts/bench-instruction-counts.sh`. Run via
 //! `cargo run --bin bench_instruction_counts -- [bench-name ...]` from the
 //! repository root or via the matching Moon task in `.moon/tasks/all.yml`.
 //!

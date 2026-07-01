@@ -65,7 +65,7 @@ fn scenario_workspace_discovery_from_subcrate_reports_member_diff() -> TestResul
 
     // Then: the lane discovers the workspace target and reports the member diff.
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_FMT_001"));
+    assert!(stderr.contains("CARGO-FMT-001"));
     assert!(stderr.contains("crates/foo/src/lib.rs"));
     Ok(())
 }
@@ -81,7 +81,7 @@ fn scenario_single_crate_root_uses_cwd_as_target() -> TestResult {
 
     // Then: the lane reports the file inside that single-crate target.
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("CARGO_FMT_001"));
+    assert!(stderr.contains("CARGO-FMT-001"));
     assert!(stderr.contains("src/lib.rs"));
     Ok(())
 }

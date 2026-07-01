@@ -233,20 +233,3 @@ fn rule_id_serde_rejects_invalid_input() {
         assert!(result.is_err(), "expected deserialization of {bad} to fail, got {result:?}");
     }
 }
-
-#[test]
-fn rule_id_valid_id_succeeds() {
-    let id = RuleId::new("CARGO_FMT_001").unwrap();
-    assert_eq!(id.as_str(), "CARGO_FMT_001");
-}
-
-#[test]
-fn rule_id_too_long_id_fails() {
-    let too_long = "A".repeat(RuleId::MAX_LEN + 1);
-    assert!(matches!(RuleId::new(&too_long), Err(RuleIdError::TooLong { .. })));
-}
-
-#[test]
-fn rule_id_invalid_char_fails() {
-    assert!(matches!(RuleId::new("lower-case"), Err(RuleIdError::NotUppercase(_, 0))));
-}

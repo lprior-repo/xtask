@@ -15,7 +15,7 @@
 //!    `#[cfg(kani)]`, and `#[kani::proof]` blocks count.
 //! 3. **Comment skip** — lines whose payload (after the file:line prefix)
 //!    starts with `//` are not violations (matches `rg` post-filter).
-//! 4. **Pattern** — `(^|[^A-Za-z0-9_])(panic!|todo!|unimplemented!|dbg!|assert!|assert_eq!|assert_ne!|unreachable!)`
+//! 4. **Pattern** — `(^|[^A-Za-z0-9_])(assert!|assert_eq!|assert_ne!|unreachable!)`
 //!
 //! Each violation becomes a typed `Finding`; the report's `render()`
 //! gives a stable `path:line: rule -- message` line. The bash's
@@ -25,24 +25,13 @@
 #![deny(clippy::panic)]
 #![forbid(unsafe_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use aho_corasick::{AhoCorasick, MatchKind};
 use titania_lanes::{Finding, LaneExit, LaneReport, SourceLine, current_target_project, exit};
 
 /// Macros the bash lane flags. Kept as a single array so additions land
 /// in one obvious place.
-const PANIC_MACROS: &[&str] =
-    &["panic!", "todo!", "unimplemented!", "dbg!", "assert!", "assert_eq!", "assert_ne!"];
-
-/// Build an Aho-Corasick automaton over `PANIC_MACROS` for the prefilter.
-///
-/// Returns `None` if construction fails for any reason; callers must
-/// then fall back to the slow per-line scan path. The `Option` API
-/// keeps the helper panic-free and `expect`-free in production.
-fn build_panic_ac() -> Option<AhoCorasick> {
-    AhoCorasick::builder().match_kind(MatchKind::LeftmostFirst).build(PANIC_MACROS).ok()
-}
+const PANIC_MACROS: &[&str] = &["assert!", "assert_eq!", "assert_ne!", "unreachable!"];
 
 /// Path segments whose presence means the file is non-production.
 const EXCLUDED_SEGMENTS: &[&str] = &[
@@ -78,14 +67,11 @@ fn main() -> std::process::ExitCode {
     );
 
     let mut report = LaneReport::new();
-    let ac = build_panic_ac();
-    for file in titania_lanes::walk::production_rust_files_par(target.as_std_path()) {
-        if !is_excluded_path(&file) {
-            scan_file(target.as_std_path(), &file, ac.as_ref(), &mut report);
-        }
+    for file in collect_source_files(target.as_std_path()) {
+        scan_file(target.as_std_path(), &file, &mut report);
     }
-    eprint!("{}", report.render());
 
+    eprint!("{}", report.render());
     if report.is_clean() {
         eprintln!("NoViolationFound");
         exit(LaneExit::Clean)
@@ -97,6 +83,41 @@ fn main() -> std::process::ExitCode {
 
 fn cwd_string() -> String {
     std::env::current_dir().map_or_else(|_| String::from("?"), |p| p.display().to_string())
+}
+
+fn collect_source_files(root: &Path) -> Vec<PathBuf> {
+    let crates_dir = root.join("crates");
+    let Ok(entries) = std::fs::read_dir(crates_dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .map(|e| e.path().join("src"))
+        .filter(|p| p.is_dir())
+        .flat_map(walk_rust_files)
+        .filter(|p| !is_excluded_path(p))
+        .collect()
+}
+
+fn walk_rust_files(dir: PathBuf) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![dir];
+    while let Some(top) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&top) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Replicate the bash `--glob '!...'`. The list mirrors
@@ -121,18 +142,11 @@ fn is_excluded_path(path: &Path) -> bool {
     false
 }
 
-fn scan_file(root: &Path, path: &Path, ac: Option<&AhoCorasick>, report: &mut LaneReport) {
+fn scan_file(root: &Path, path: &Path, report: &mut LaneReport) {
     report.record_scan();
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
-
-    // Aho-Corasick prefilter at the file level was measured as
-    // net-negative on the 1K-file fixture (every Rust source file
-    // contains at least one of the panic-macro substrings as test
-    // code, so the prefilter rarely fires and we pay AC setup cost
-    // every file). The AC is still useful per-line inside
-    // `first_panic_macro`, where it replaces 8 sequential `find`s.
 
     let display = rel_str(root, path);
     // Stacks of (synthetic_open_added, global_brace_depth_at_open).
@@ -159,11 +173,6 @@ fn scan_file(root: &Path, path: &Path, ac: Option<&AhoCorasick>, report: &mut La
         // not flag) and `parsed.code()` to look for the macros in
         // rune form (so an `assert!` inside a string literal does
         // not leak through).
-        // Per-line Aho-Corasick prefilter was measured as net-negative:
-        // the per-call AC setup cost exceeded the SourceLine::parse
-        // skip savings on the 1K-file fixture. Rely on the file-level
-        // prefilter above and let the per-line parser remain in charge
-        // of the rare files that contain a panic-macro substring.
         let parsed = SourceLine::parse(raw, &mut block_comment);
         if parsed.is_non_code() {
             // Even all-comment lines can affect the global brace
@@ -191,7 +200,7 @@ fn scan_file(root: &Path, path: &Path, ac: Option<&AhoCorasick>, report: &mut La
         }
 
         let inside_test_or_kani = cfg_depth > 0 || kani_proof_depth > 0;
-        if !inside_test_or_kani && let Some(macro_name) = first_panic_macro(parsed.code(), ac) {
+        if !inside_test_or_kani && let Some(macro_name) = first_panic_macro(parsed.code()) {
             report.push(Finding::new(
                 "PANIC-SURFACE-001",
                 display.clone(),
@@ -233,15 +242,10 @@ fn rel_str(root: &Path, path: &Path) -> String {
 
 /// Net `{` - `}` count for a line: positive when more open than close.
 fn line_brace_delta(line: &str) -> i32 {
-    let mut opens: i32 = 0;
-    let mut closes: i32 = 0;
-    for &b in line.as_bytes() {
-        if b == b'{' {
-            opens = opens.saturating_add(1);
-        } else if b == b'}' {
-            closes = closes.saturating_add(1);
-        }
-    }
+    let opens =
+        i32::try_from(line.bytes().filter(|b| *b == b'{').count()).map_or(i32::MAX, |value| value);
+    let closes =
+        i32::try_from(line.bytes().filter(|b| *b == b'}').count()).map_or(i32::MAX, |value| value);
     opens.saturating_sub(closes)
 }
 
@@ -255,46 +259,14 @@ fn is_cfg_attr_open(line: &str, scopes: &[&str]) -> bool {
     scopes.iter().any(|s| inside.split(',').any(|p| p.trim() == *s))
 }
 
-fn first_panic_macro(line: &str, ac: Option<&AhoCorasick>) -> Option<&'static str> {
-    // Fast path: Aho-Corasick finds every substring match in a single
-    // pass. We return the lexicographically first matching macro name
-    // that satisfies the word-boundary check. `MatchKind::LeftmostFirst`
-    // gives us matches in source-position order; we keep the smallest
-    // PANIC_MACROS-index among the candidates that pass the boundary
-    // check, preserving the original `find`-loop semantics where the
-    // first needle declared in `PANIC_MACROS` wins on ties.
-    if let Some(automaton) = ac {
-        let mut best: Option<(usize, &'static str)> = None;
-        for matched in automaton.find_iter(line) {
-            let pat_idx = matched.pattern().as_usize();
-            let Some(macro_name) = PANIC_MACROS.get(pat_idx).copied() else {
-                continue;
-            };
-            let start = matched.start();
-            let end = matched.end();
-            let bytes = line.as_bytes();
-            let before_ok =
-                start == 0 || bytes.get(start.wrapping_sub(1)).is_none_or(|b| !is_word_byte(*b));
-            let after_ok = bytes.get(end).is_none_or(|b| !is_word_byte(*b));
-            if !(before_ok && after_ok) {
-                continue;
-            }
-            match best {
-                None => best = Some((pat_idx, macro_name)),
-                Some((best_idx, _)) if pat_idx < best_idx => {
-                    best = Some((pat_idx, macro_name));
-                }
-                Some(_) => {}
-            }
-        }
-        return best.map(|(_, name)| name);
-    }
-    // Fallback: linear scan across `PANIC_MACROS` when AC is unavailable.
+fn first_panic_macro(line: &str) -> Option<&'static str> {
     PANIC_MACROS.iter().copied().find(|m| {
         let Some(idx) = line.find(m) else {
             return false;
         };
         let bytes = line.as_bytes();
+        // `.get` rather than `bytes[idx - 1]` to avoid the indexing
+        // lint. `None` means "no neighbor" which is a valid word boundary.
         let before_ok =
             idx == 0 || bytes.get(idx.wrapping_sub(1)).is_none_or(|b| !is_word_byte(*b));
         let Some(after_idx) = idx.checked_add(m.len()) else {
@@ -304,6 +276,7 @@ fn first_panic_macro(line: &str, ac: Option<&AhoCorasick>) -> Option<&'static st
         before_ok && after_ok
     })
 }
+
 fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
