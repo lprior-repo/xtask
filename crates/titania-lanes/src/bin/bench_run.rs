@@ -39,6 +39,7 @@ const KNOWN_LANES: &[&str] = &[
     "check-panic-surface",
     "check-source-length",
     "check-ignored-fallible-results",
+    "check-nightly-features",
 ];
 
 #[derive(Debug)]
