@@ -1,7 +1,8 @@
 # Titania
 
-**The Rust QA fairy for AI-assisted code.**
+**A Moonrepo-powered Rust QA gate for AI-assisted code.**
 
+> Moon is non-negotiable. **MOON CI/CD is the absolute foundation for all of this work.**
 > AI writes code fast. Titania makes it prove it didn't hallucinate the basics.
 
 Typed evidence. Strict policy. Fewer AI faceplants.
@@ -13,6 +14,7 @@ cheaper to trust.**
 ---
 
 Titania is a **Moonrepo-powered** Rust QA gate that runs locally and in CI.
+Moon orchestrates every lane; Titania supplies the typed Rust checks Moon runs.
 It shells out to proven tools (`cargo`, `clippy`, `ast-grep`, `dylint`,
 `cargo-deny`), normalizes failures into typed findings, and emits
 reproducible receipts — so humans and AI agents repair code against

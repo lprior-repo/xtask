@@ -1,6 +1,8 @@
 # Titania-Check v1 Specification
 
 > **Status: BUILDABLE CONTRACT** — Moon 2026
+> **Moon is non-negotiable:** MOON CI/CD is the absolute foundation for all of this work.
+> Every v1 lane is specified as a typed Rust check that Moon orchestrates.
 > Companion: [`VISION.md`](./VISION.md) (the grand ambition)
 >
 > This document is the implementation contract. Every type is defined here.
@@ -11,7 +13,9 @@
 
 ## 1. Product Statement
 
-Titania-check is the typed Rust quality layer for Moon CI/CD. It enforces the
+Titania-check is the typed Rust quality layer for Moon CI/CD. Moon is the
+absolute foundation: Titania-check exists to give Moon CI/CD typed, auditable
+Rust quality lanes instead of bash-in-YAML log soup. It enforces the
 `strict-ai` coding standard via typed lanes, structured findings, and a
 reproducible `QualityReceipt`. Distribution is a single binary plus a
 co-located dylint library, orchestrated by Moon's task graph.

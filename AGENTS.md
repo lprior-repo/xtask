@@ -2,6 +2,10 @@
 
 High-assurance Rust work for **titania-check**. Beads for tracking. Skills for verification discipline.
 
+Moon is non-negotiable: **MOON CI/CD is the absolute foundation for all of this work.**
+Every high-assurance lane, Rust gate, and Beads delivery step is expected to
+respect Moon as the canonical CI/CD orchestrator.
+
 ## Beads (bd)
 
 Use `bd` for ALL task tracking. Never TodoWrite/markdown TODO lists. Run `bd prime` for full context after compaction.

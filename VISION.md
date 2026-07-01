@@ -4,16 +4,20 @@
 > Companion: [`v1-spec.md`](./v1-spec.md) (the concrete, buildable v1 contract)
 >
 > **Tool name:** `titania-check` (binary) · `.titania/` (config) · `titania-*` (crates)
+>
+> Moon is non-negotiable: **MOON CI/CD is the absolute foundation for all of this work.**
 
 ---
 
 ## 0. Vision Statement
 
-Titania-check is the high-assurance Rust CI toolchain for teams using Moon. It
-replaces bash-in-YAML pipelines with typed Rust lanes, enforces strict coding
-standards by default, and accumulates formal verification evidence in batches —
-from "the code has the right shape" to "the code is mathematically proven
-correct."
+Titania-check is the high-assurance Rust CI toolchain for teams using Moon.
+Moon CI/CD is the absolute foundation: every typed Rust lane is designed to run
+inside Moon's task graph before any agent, hook, or CI provider claims success.
+Titania replaces bash-in-YAML pipelines with typed Rust lanes, enforces strict
+coding standards by default, and accumulates formal verification evidence in
+batches — from "the code has the right shape" to "the code is mathematically
+proven correct."
 
 Titania-check is opinionated, not configurable. Its `strict-ai` policy is the
 default and only profile. A `strict-critical-rust` profile for medical/aerospace
@@ -27,7 +31,7 @@ IV&V lifecycle.
 
 ---
 
-## 1. The Problem
+## 1. Moon CI/CD Is the Foundation
 
 Rust CI in 2026 is bash-in-YAML. Every team reinvents the same pipeline:
 
@@ -110,11 +114,11 @@ attribute or path convention is specified. These are v3.0 design problems.
 
 Titania-check becomes the canonical quality pipeline for Rust projects using Moon.
 
+- **Moon replaces ad-hoc orchestration.**
 - **Typed lanes replace shell scripts.**
 - **Strict standards replace configuration.**
 - **Verification batches replace binary gates.**
 - **Architecture enforcement replaces decay.**
-- **Moon replaces ad-hoc orchestration.**
 
 ---
 
