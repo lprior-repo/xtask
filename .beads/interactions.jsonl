@@ -72,3 +72,4 @@
 {"id":"int-efe11b4b33e4eaa565b299251033d2ea","kind":"field_change","created_at":"2026-07-01T23:32:12.1348674Z","actor":"Lewis","issue_id":"tn-d2h","extra":{"field":"assignee","new_value":"","old_value":"Lewis"}}
 {"id":"int-b126db9ffffe6079c1e0024bbac59f7e","kind":"field_change","created_at":"2026-07-01T23:32:12.498844256Z","actor":"Lewis","issue_id":"tn-b2w","extra":{"field":"status","new_value":"open","old_value":"in_progress"}}
 {"id":"int-958297e009cacde621013a2285f9cf5c","kind":"field_change","created_at":"2026-07-01T23:32:12.498916575Z","actor":"Lewis","issue_id":"tn-b2w","extra":{"field":"assignee","new_value":"","old_value":"Lewis"}}
+{"id":"int-93133f9e1e8528acf6ee3952bd384799","kind":"field_change","created_at":"2026-07-02T01:02:08.558706231Z","actor":"Lewis","issue_id":"tn-u2p","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
